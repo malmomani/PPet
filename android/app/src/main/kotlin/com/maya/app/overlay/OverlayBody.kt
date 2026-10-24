@@ -250,13 +250,19 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
                 val gesture = classifyGesture(distance, duration, hypot(vx, vy), touchSlop.toFloat())
                 val wasDragging = dragging
                 endTouch()
-                when (gesture) {
-                    Gesture.TAP -> onTap(wasDragging)
-                    Gesture.DRAG -> {
-                        behavior.dragEnd(params.x.toFloat())
-                        emit(UserDrag(false))
+                if (!wasDragging) {
+                    // The finger never crossed touch slop, so she was never picked up: a short press
+                    // is a tap, a long stationary press is nothing (not a drag).
+                    if (duration < LONG_PRESS_MS) onTap(false)
+                } else {
+                    when (gesture) {
+                        Gesture.TAP -> onTap(true)
+                        Gesture.DRAG -> {
+                            behavior.dragEnd(params.x.toFloat())
+                            emit(UserDrag(false))
+                        }
+                        Gesture.FLING -> throwBody(vx, vy)
                     }
-                    Gesture.FLING -> throwBody(vx, vy)
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -388,6 +394,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
         const val THROW_SECONDS = 0.25f
         const val UNREACHABLE_BUBBLE_MS = 3000L
         const val TOGGLE_WINDOW_MS = 500L
+        const val LONG_PRESS_MS = 1000L // a stationary press this long is ignored
     }
 }
 
