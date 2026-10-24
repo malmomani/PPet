@@ -81,3 +81,28 @@ def refl(llm, memory, persona, db, clock):
     from maya_brain.reflection import Reflection
 
     return Reflection(llm, memory, persona, db, clock, ReflectionConfig())
+
+
+@pytest.fixture
+def sent():
+    return []
+
+
+@pytest.fixture
+def mind(db, clock, sent):
+    from maya_brain.config import Config
+    from maya_brain.db import set_state
+    from maya_brain.llm import FakeLLM
+    from maya_brain.mind import Mind
+
+    # Mark today's reflection as done so it doesn't consume scripted replies.
+    set_state(
+        db,
+        "reflection",
+        {"last_date": clock.now().date().isoformat(), "last_at": clock.now().isoformat()},
+    )
+
+    async def sink(action):
+        sent.append(action)
+
+    return Mind(Config(), FakeLLM(), db, clock, sink)
