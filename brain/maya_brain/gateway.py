@@ -58,8 +58,10 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
     async def ws_endpoint(ws: WebSocket) -> None:
         nonlocal active
         await ws.accept()
+        peer = ws.client.host if ws.client else "unknown"  # never log the URL: its query has the token
         token = ws.query_params.get("token", "")
         if not hmac.compare_digest(token.encode(), cfg.server.token.encode()):
+            log.warning("rejected connection from %s: bad credentials", peer)
             await ws.send_text(Error(code="auth", message="invalid token").model_dump_json())
             await ws.close(code=CLOSE_AUTH)
             return
@@ -67,6 +69,7 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
         previous = active
         active = ws
         mind.set_connected(True)
+        log.info("phone connected from %s", peer)
         if previous is not None:
             try:
                 await previous.close(code=CLOSE_REPLACED)
@@ -101,6 +104,7 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
             if active is ws:
                 active = None
                 mind.set_connected(False)
+                log.info("phone disconnected")
 
     async def sink_to(ws: WebSocket, action: Action) -> None:
         try:

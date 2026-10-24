@@ -148,3 +148,51 @@ async def test_receive_runtime_error_ends_handler_quietly(clock):
         assert mind.connected is False
     finally:
         conn.close()
+
+
+def test_main_refuses_short_token(tmp_path, capsys):
+    from maya_brain.__main__ import main
+
+    cfg = tmp_path / "m.toml"
+    cfg.write_text('[server]\ntoken = "only15charsxxxx"\n')
+    assert main(["--config", str(cfg)]) == 2
+    assert "token" in capsys.readouterr().err
+
+
+def test_main_runs_uvicorn_without_token_in_logs(tmp_path, monkeypatch):
+    import logging
+
+    import maya_brain.__main__ as entry
+
+    seen = {}
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: seen.update(kw))
+    cfg = tmp_path / "m.toml"
+    cfg.write_text(f'db_path = "{tmp_path / "m.db"}"\n[server]\ntoken = "a-long-enough-secret"\n')
+    assert entry.main(["--config", str(cfg)]) == 0
+    assert seen["access_log"] is False and seen["log_config"] is None
+    assert all(entry.REDACT_TOKENS in h.filters for h in logging.getLogger().handlers)
+
+
+def test_redact_tokens_filter():
+    import logging
+
+    from maya_brain.__main__ import REDACT_TOKENS
+
+    record = logging.LogRecord(
+        "uvicorn.error", logging.INFO, __file__, 1, '%s - "WebSocket %s" [accepted]',
+        ("1.2.3.4:5", "/ws?token=supersecret&x=1"), None,
+    )
+    assert REDACT_TOKENS.filter(record) is True
+    assert "supersecret" not in record.getMessage() and "token=***&x=1" in record.getMessage()
+
+
+def test_gateway_logs_connect_without_query_string(client, caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="maya_brain.gateway"):
+        with client.websocket_connect("/ws?token=t") as ws:
+            ws.send_json({"type": "hello", "client_version": "1", "screen_w": 1, "screen_h": 1})
+            ws.receive_json()
+    messages = [r.getMessage() for r in caplog.records if r.name == "maya_brain.gateway"]
+    assert any("connected" in m for m in messages)
+    assert not any("token" in m for m in messages)
