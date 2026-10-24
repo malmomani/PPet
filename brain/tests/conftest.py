@@ -65,3 +65,11 @@ def thinker_with(persona, memory, emo, clock):
         return Thinker(fake, persona, memory, emo, clock), fake
 
     return make
+
+
+@pytest.fixture
+def ini(db, clock):
+    from maya_brain.config import InitiativeConfig
+    from maya_brain.initiative import Initiative
+
+    return Initiative(InitiativeConfig(), db, clock)
