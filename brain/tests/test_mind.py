@@ -9,6 +9,7 @@ from maya_brain.protocol import (
     AppOpened,
     Hello,
     OfflineSummary,
+    Screen,
     UserDrag,
     UserMessage,
     UserShush,
@@ -183,3 +184,35 @@ async def test_run_ticker_calls_tick_and_survives_errors(db, clock):
     stop.set()
     await asyncio.wait_for(task, 1)
     assert calls >= 3
+
+
+async def test_no_initiative_while_disconnected(mind, sent):
+    mind.set_connected(False)
+    mind.initiative._set_urge(100)
+    await mind.tick()
+    assert sent == [] and mind.thinker.llm.calls == []
+    mind.set_connected(True)
+    await mind.tick()
+    assert any(a.type == "say" for a in sent)
+
+
+async def test_urge_does_not_grow_while_disconnected(mind):
+    mind.set_connected(False)
+    await mind.tick()
+    assert mind.initiative.urge == 0
+
+
+async def test_no_initiative_while_screen_off(mind, sent):
+    await mind.handle(Screen(on=False))
+    mind.initiative._set_urge(100)
+    await mind.tick()
+    assert mind.thinker.llm.calls == []
+    await mind.handle(Screen(on=True))
+    assert any(a.type == "say" for a in sent)
+
+
+async def test_hello_resets_screen_state(mind, sent):
+    await mind.handle(Screen(on=False))
+    mind.initiative._set_urge(100)
+    await mind.handle(Hello(client_version="1", screen_w=1, screen_h=1))
+    assert any(a.type == "say" for a in sent)

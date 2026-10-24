@@ -31,6 +31,7 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
             log.debug("dropping action: socket closed", exc_info=True)
 
     mind.set_sink(sink)
+    mind.set_connected(False)  # nobody is listening until a phone connects
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -65,6 +66,7 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
 
         previous = active
         active = ws
+        mind.set_connected(True)
         if previous is not None:
             try:
                 await previous.close(code=CLOSE_REPLACED)
@@ -89,6 +91,7 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
         finally:
             if active is ws:
                 active = None
+                mind.set_connected(False)
 
     async def sink_to(ws: WebSocket, action: Action) -> None:
         try:

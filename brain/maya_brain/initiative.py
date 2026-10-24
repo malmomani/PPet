@@ -137,6 +137,7 @@ class Initiative:
         elif isinstance(event, Screen) and not event.on:
             self._app = None
             self._session_bumped = False
+            self._late_pending = False  # nobody is looking any more
         elif isinstance(event, Charging) and event.on:
             self._bump(CHARGING_BUMP)
 
@@ -156,7 +157,12 @@ class Initiative:
         self._save()
 
     def tick(self, tier: str, mood: str) -> None:
-        self._bump(TIER_MULT.get(tier, 1.0) * MOOD_MULT.get(mood, 1.0))
+        now = self.clock.now()
+        silent_until = _dt(self._silent_until)
+        silenced = silent_until is not None and now < silent_until
+        quiet = self._in_quiet(now) and not self._late_pending
+        if not (silenced or quiet):
+            self._bump(TIER_MULT.get(tier, 1.0) * MOOD_MULT.get(mood, 1.0))
         app = self.current_app()
         if app is not None and app[1] > LONG_SESSION_MIN and not self._session_bumped:
             self._session_bumped = True

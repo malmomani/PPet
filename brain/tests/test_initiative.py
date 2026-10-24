@@ -100,3 +100,32 @@ def test_late_night_pending_cleared_by_later_event_outside_window(ini, clock):
     clock.set(clock.now().replace(hour=2, minute=0) + timedelta(days=1))
     ini._set_urge(60)
     assert not ini.should_fire()
+
+
+def test_screen_off_clears_late_night_pending(ini, clock):
+    clock.set(clock.now().replace(hour=1, minute=0) + timedelta(days=1))
+    ini.on_event(Screen(on=True))
+    ini.on_event(Screen(on=False))
+    ini._set_urge(60)
+    assert not ini.should_fire()
+
+
+def test_no_base_gain_while_shushed(ini, clock):
+    ini.shush()
+    ini.tick("close", "bored")
+    assert ini.urge == 0
+    clock.advance(timedelta(minutes=60))
+    ini.tick("close", "bored")
+    assert ini.urge == pytest.approx(3.0)
+
+
+def test_no_base_gain_in_quiet_hours_unless_late_night_pending(ini, clock):
+    clock.set(clock.now().replace(hour=23, minute=45))
+    ini.tick("friend", "curious")
+    assert ini.urge == 0
+    clock.set(clock.now().replace(hour=1, minute=0) + timedelta(days=1))
+    ini.tick("friend", "curious")
+    assert ini.urge == 0
+    ini.on_event(Screen(on=True))  # late-night use: +10 and pending
+    ini.tick("friend", "curious")
+    assert ini.urge == pytest.approx(11)

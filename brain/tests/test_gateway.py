@@ -90,3 +90,25 @@ def test_main_refuses_default_token(tmp_path, capsys):
 
     assert main(["--config", str(tmp_path / "none.toml")]) == 2
     assert "token" in capsys.readouterr().err
+
+
+def test_connection_state_follows_socket(clock):
+    cfg = Config()
+    cfg.server.token = "t"
+    conn = open_db(":memory:")
+    mind = Mind(cfg, FakeLLM(), conn, clock)
+    app = create_app(cfg, mind)
+    hello = {"type": "hello", "client_version": "1", "screen_w": 1, "screen_h": 1}
+    try:
+        with TestClient(app) as c:
+            assert mind.connected is False
+            with c.websocket_connect("/ws?token=t") as ws:
+                ws.send_json(hello)
+                ws.receive_json()
+                assert mind.connected is True
+            with c.websocket_connect("/ws?token=t") as ws:  # handler of the first socket has finished
+                ws.send_json(hello)
+                ws.receive_json()
+            assert mind.connected is False
+    finally:
+        conn.close()

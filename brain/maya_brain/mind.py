@@ -22,6 +22,7 @@ from .protocol import (
     OfflineSummary,
     ProtocolError,
     Say,
+    Screen,
     State,
     Typing,
     UserDrag,
@@ -72,6 +73,8 @@ class Mind:
         self._lock = asyncio.Lock()
         self._last_event: datetime | None = None
         self._last_tap_think: datetime | None = None
+        self._connected = True  # the gateway reports the real state; tests and the simulator are always "connected"
+        self._screen_on: bool | None = None  # None = unknown (treated as on)
         self.memory = Memory(db, llm, clock)
         self.persona = Persona(db, cfg.persona, clock)
         self.emotion = Emotion(db, clock)
@@ -81,6 +84,16 @@ class Mind:
 
     def set_sink(self, sink: ActionSink | None) -> None:
         self._sink = sink
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    def set_connected(self, on: bool) -> None:
+        self._connected = on
+
+    def _can_be_heard(self) -> bool:
+        return self._connected and self._screen_on is not False
 
     async def _emit(self, action: Action) -> None:
         if self._sink is not None:
@@ -110,7 +123,10 @@ class Mind:
                 await self._on_tap()
                 return
             if isinstance(event, Hello):
+                self._screen_on = None
                 await self._emit_state()
+            elif isinstance(event, Screen):
+                self._screen_on = event.on
             elif isinstance(event, UserDrag):
                 await self._on_drag(event)
             elif isinstance(event, UserShush):
@@ -202,7 +218,7 @@ class Mind:
 
     async def _maybe_initiate(self) -> None:
         """Call only while holding the lock."""
-        if not self.initiative.should_fire():
+        if not self._can_be_heard() or not self.initiative.should_fire():
             return
         app = self.initiative.current_app()
         reason = self.initiative.last_reason or "You feel like saying something."
@@ -218,7 +234,8 @@ class Mind:
     async def tick(self) -> None:
         async with self._lock:
             self.emotion.daily_drift()
-            self.initiative.tick(self.emotion.tier(), self.emotion.mood()[0])
+            if self._can_be_heard():
+                self.initiative.tick(self.emotion.tier(), self.emotion.mood()[0])
             last_turn = self.memory.last_turn_time()
             if (
                 self.memory.unsummarized_turns()
