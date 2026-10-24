@@ -50,7 +50,8 @@ def test_parse_command_details():
 
 def test_parse_invalid_arguments_give_help():
     for line in ("/time 25:99", "/time", "/time abc", "/skip", "/skip 3x", "/skip -1h", "/screen maybe",
-                 "/charge", "/app", "/app   "):
+                 "/charge", "/app", "/app   ", "/skip 31d", "/skip 99999999999d", "/skip 43201m", "/skip 721h",
+                 "/skip 0m"):
         assert parse_command(line, NOW) == ("help", None), line
 
 
@@ -103,7 +104,7 @@ async def test_show_commands(mind, clock):
     out = await run_lines(mind, clock, "hi", "/status", "/mood", "/facts", "/traits", "/diary", "/thoughts", "/quit")
     assert "closeness" in out
     assert out.count("(none)") >= 3
-    assert "hehe" in out
+    assert "thought:" in out and "say: hehe" in out
 
 
 async def test_reflect_and_help_and_eof(mind, clock):
@@ -127,3 +128,34 @@ def test_main_fake_llm_scripted(tmp_path, monkeypatch, capsys):
     code = main(["--fake-llm", "--db", str(tmp_path / "sim.db"), "--config", str(tmp_path / "none.toml")])
     assert code == 0
     assert "Maya: hehe" in capsys.readouterr().out
+
+
+async def test_huge_skip_is_rejected_and_repl_continues(mind, clock):
+    start = clock.now()
+    out = await run_lines(mind, clock, "/skip 99999999999d", "/skip 31d", "/quit")
+    assert out.count("Commands:") == 2
+    assert clock.now() == start
+
+
+def test_max_skip_is_accepted():
+    assert parse_command("/skip 30d", NOW) == ("skip", timedelta(days=30))
+
+
+async def test_exception_in_handle_does_not_end_session(mind, clock):
+    async def boom(event):
+        raise RuntimeError("kaboom")
+
+    mind.handle = boom
+    out = await run_lines(mind, clock, "hi", "/mood", "/quit")
+    assert "[error RuntimeError: kaboom]" in out
+    assert "mood=" in out
+
+
+async def test_exception_in_dispatch_does_not_end_session(mind, clock, monkeypatch):
+    def bad_status():
+        raise ValueError("bad status")
+
+    monkeypatch.setattr(mind, "status", bad_status)
+    out = await run_lines(mind, clock, "/mood", "/facts", "/quit")
+    assert "[error ValueError: bad status]" in out
+    assert "(none)" in out

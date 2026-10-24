@@ -48,7 +48,7 @@ HELP = """Commands:
   /screen on|off    turn the phone screen on or off
   /charge on|off    plug in or unplug the charger
   /time HH:MM       set the virtual clock to that time today
-  /skip <N>m|h|d    advance the virtual clock (e.g. /skip 90m, /skip 3h, /skip 2d)
+  /skip <N>m|h|d    advance the virtual clock, up to 30d (e.g. /skip 90m, /skip 3h, /skip 2d)
   /reflect          run Maya's reflection now (facts, traits, diary)
   /thoughts         Maya's last 5 private thoughts
   /mood             current mood, closeness and tier
@@ -62,6 +62,8 @@ HELP = """Commands:
 _SKIP_RE = re.compile(r"^(\d+)([mhd])$")
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
+_UNIT_MINUTES = {"m": 1, "h": 60, "d": 1440}
+MAX_SKIP = timedelta(days=30)
 
 
 def parse_command(line: str, now: datetime) -> tuple[str, object]:
@@ -99,6 +101,8 @@ def parse_command(line: str, now: datetime) -> tuple[str, object]:
         m = _SKIP_RE.match(arg.lower())
         if not m or int(m.group(1)) == 0:
             return help_
+        if int(m.group(1)) * _UNIT_MINUTES[m.group(2)] > MAX_SKIP.total_seconds() // 60:
+            return help_  # too long to simulate; also avoids timedelta/datetime overflow
         return "skip", timedelta(**{_UNITS[m.group(2)]: int(m.group(1))})
     if cmd in SHOW_NAMES:
         return "show", cmd
@@ -192,41 +196,44 @@ async def run_sim(
             return
         if not line.strip():
             continue
-        kind, payload = parse_command(line, clock.now())
+        try:
+            kind, payload = parse_command(line, clock.now())
 
-        if kind == "quit":
-            return
-        if kind == "help":
-            write(HELP)
-        elif kind == "event":
-            if isinstance(payload, AppOpened):
-                app = (payload.package, payload.label, clock.now())
-            await guarded(mind.handle(payload))
-        elif kind == "close":
-            if app is None:
-                write("(no app is open)")
-                continue
-            package, label, opened = app
-            app = None
-            elapsed = max(0, int((clock.now() - opened).total_seconds()))
-            await guarded(mind.handle(AppClosed(package=package, label=label, duration_s=elapsed)))
-        elif kind == "time":
-            clock.set(payload)
-            write(f"[time set — now {_fmt_now(clock)}]")
-        elif kind == "skip":
-            end = clock.now() + payload
-            while clock.now() < end:
-                clock.advance(min(step, end - clock.now()))
-                await guarded(mind.tick())
-            write(f"[skipped {_fmt_delta(payload)} — now {_fmt_now(clock)}]")
-        elif kind == "show":
-            for text in _show(mind, payload):
-                write(text)
-        elif kind == "reflect":
-            write("[reflecting…]")
-            await guarded(mind.reflection.reflect())
-            write("[reflection done — see /facts /traits /diary]")
+            if kind == "quit":
+                return
+            if kind == "help":
+                write(HELP)
+            elif kind == "event":
+                if isinstance(payload, AppOpened):
+                    app = (payload.package, payload.label, clock.now())
+                await guarded(mind.handle(payload))
+            elif kind == "close":
+                if app is None:
+                    write("(no app is open)")
+                    continue
+                package, label, opened = app
+                app = None
+                elapsed = max(0, int((clock.now() - opened).total_seconds()))
+                await guarded(mind.handle(AppClosed(package=package, label=label, duration_s=elapsed)))
+            elif kind == "time":
+                clock.set(payload)
+                write(f"[time set — now {_fmt_now(clock)}]")
+            elif kind == "skip":
+                end = clock.now() + payload
+                while clock.now() < end:
+                    clock.advance(min(step, end - clock.now()))
+                    await guarded(mind.tick())
+                write(f"[skipped {_fmt_delta(payload)} — now {_fmt_now(clock)}]")
+            elif kind == "show":
+                for text in _show(mind, payload):
+                    write(text)
+            elif kind == "reflect":
+                write("[reflecting…]")
+                await guarded(mind.reflection.reflect())
+                write("[reflection done — see /facts /traits /diary]")
 
+        except Exception as exc:  # one bad line must never kill the REPL
+            write(f"[error {type(exc).__name__}: {exc}]")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="maya_brain.sim", description="Chat with Maya in the terminal")
