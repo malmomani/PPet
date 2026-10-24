@@ -112,3 +112,39 @@ def test_connection_state_follows_socket(clock):
             assert mind.connected is False
     finally:
         conn.close()
+
+
+def test_binary_frame_does_not_kill_socket(client):
+    with client.websocket_connect("/ws?token=t") as ws:
+        ws.send_bytes(b"\x00\x01")
+        assert ws.receive_json()["code"] == "bad_message"
+        ws.send_json({"type": "hello", "client_version": "1", "screen_w": 1, "screen_h": 1})
+        assert ws.receive_json()["type"] == "state"
+
+
+async def test_receive_runtime_error_ends_handler_quietly(clock):
+    cfg = Config()
+    cfg.server.token = "t"
+    conn = open_db(":memory:")
+    mind = Mind(cfg, FakeLLM(), conn, clock)
+    app = create_app(cfg, mind)
+    # A second "connect" mid-session makes Starlette's receive() raise RuntimeError, like a closed socket.
+    incoming = [{"type": "websocket.connect"}, {"type": "websocket.connect"}]
+    out = []
+
+    async def receive():
+        return incoming.pop(0)
+
+    async def send(message):
+        out.append(message)
+
+    scope = {
+        "type": "websocket", "path": "/ws", "raw_path": b"/ws", "query_string": b"token=t", "headers": [],
+        "scheme": "ws", "server": ("testserver", 80), "client": ("phone", 1), "root_path": "", "subprotocols": [],
+    }
+    try:
+        await app(scope, receive, send)
+        assert out[0]["type"] == "websocket.accept"
+        assert mind.connected is False
+    finally:
+        conn.close()

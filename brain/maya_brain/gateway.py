@@ -75,7 +75,16 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
 
         try:
             while True:
-                raw = await ws.receive_text()
+                try:
+                    message = await ws.receive()
+                except RuntimeError:  # socket was closed under us (e.g. replaced by a newer connection)
+                    break
+                if message["type"] == "websocket.disconnect":
+                    break
+                raw = message.get("text")
+                if raw is None:  # binary frame: not part of the protocol
+                    await sink_to(ws, Error(code="bad_message", message="invalid message"))
+                    continue
                 try:
                     event = parse_event(raw)
                 except Exception:
