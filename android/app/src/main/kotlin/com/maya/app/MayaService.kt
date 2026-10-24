@@ -9,8 +9,12 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
@@ -59,6 +63,7 @@ class MayaService : Service() {
     private var status = Status.NAPPING
     /** The user hid Maya with the notification's Hide action. */
     private var overlayHidden = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -88,6 +93,7 @@ class MayaService : Service() {
 
     override fun onDestroy() {
         running = false
+        stopNetworkWatch()
         overlayBody?.destroy()
         overlayBody = null
         overlay = null
@@ -124,7 +130,37 @@ class MayaService : Service() {
         connection = conn
         conn.start()
         startSenses()
+        startNetworkWatch()
         return true
+    }
+
+    // ---- network ----
+
+    /** A network coming back (Wi-Fi joined, Tailscale up) is a good moment to retry the brain at once. */
+    private fun startNetworkWatch() {
+        if (networkCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                connection?.reconnectNow() // delivered on the main thread (handler below)
+            }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(callback, Handler(Looper.getMainLooper()))
+            networkCallback = callback
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "no network callback: ${e.javaClass.simpleName}")
+        }
+    }
+
+    private fun stopNetworkWatch() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        try {
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
+        } catch (e: IllegalArgumentException) {
+            // Already unregistered.
+        }
     }
 
     // ---- overlay ----
@@ -177,6 +213,7 @@ class MayaService : Service() {
     private fun onDeviceEvent(e: Event) {
         if (e is Screen) {
             if (e.on) {
+                connection?.reconnectNow() // she should wake up promptly when the user is back
                 emit(e)
                 appUsage?.setScreenOn(true)
                 overlay?.setScreenOn(true)

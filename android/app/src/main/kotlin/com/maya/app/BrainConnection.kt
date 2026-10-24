@@ -36,7 +36,7 @@ class BrainConnection(
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)
+        .pingInterval(45, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
     private val backoff = Backoff()
@@ -68,6 +68,22 @@ class BrainConnection(
         socket = null
         connected = false
         ws?.close(NORMAL_CLOSURE, null)
+    }
+
+    /**
+     * Skips the backoff wait (screen unlocked, network back): if we are neither connected nor
+     * stopped, cancels the pending retry, resets the backoff and connects now. An attempt already
+     * in flight is left to finish; with the backoff reset, a failure retries after 1 s.
+     */
+    fun reconnectNow() {
+        if (!onMain()) {
+            main.post { reconnectNow() }
+            return
+        }
+        if (stopped || connected) return
+        backoff.reset()
+        if (socket != null) return
+        connect() // also removes the pending retry
     }
 
     /** Sends now when connected; otherwise queues sense events (app/screen/charging) and drops user events. */
