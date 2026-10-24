@@ -160,7 +160,10 @@ class MayaService : Service() {
         deviceSense = null
     }
 
-    /** Screen changes also drive app-usage polling; order matters so the brain sees a tidy sequence. */
+    /**
+     * Screen changes (on = on and unlocked, see [DeviceSense]) also drive app-usage polling and the
+     * overlay's frame loop; order matters so the brain sees a tidy sequence.
+     */
     private fun onDeviceEvent(e: Event) {
         if (e is Screen) {
             if (e.on) {
@@ -179,8 +182,7 @@ class MayaService : Service() {
 
     /** The brain forgets the current app on hello: tell it the screen state and what is open now. */
     private fun reemitState() {
-        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
-        emit(Screen(interactive))
+        emit(Screen(screenUsable()))
         val current = appUsage?.currentApp() ?: return
         emit(AppOpened(current.first, current.second))
     }
