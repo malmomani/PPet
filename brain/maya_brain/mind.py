@@ -42,6 +42,7 @@ CANNED_FOGGY = "…my head's a bit foggy. Try again?"
 
 TAP_THINK_INTERVAL = timedelta(seconds=30)
 SUMMARIZE_IDLE = timedelta(minutes=10)
+REFLECT_IDLE = timedelta(minutes=10)  # reflection holds the lock for several LLM calls: not while the user is around
 MIN_APP_USE_S = 120
 
 
@@ -250,7 +251,8 @@ class Mind:
                 and self.clock.now() - last_turn >= SUMMARIZE_IDLE
             ):
                 await self.reflection.summarize_pending()
-            if self.reflection.due(self._last_event):
+            user_idle = self._last_event is None or self.clock.now() - self._last_event >= REFLECT_IDLE
+            if user_idle and self.reflection.due(self._last_event):
                 await self.reflection.reflect()
             await self._maybe_initiate()
 

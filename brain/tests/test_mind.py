@@ -258,3 +258,34 @@ async def test_only_thrown_drag_changes_closeness(mind):
     assert mind.emotion.closeness == 10
     await mind.handle(UserDrag(thrown=True))
     assert mind.emotion.closeness == 11
+
+
+async def test_reflection_deferred_while_user_active(mind, clock, monkeypatch):
+    runs = []
+
+    async def fake_reflect():
+        runs.append(clock.now())
+        return True
+
+    monkeypatch.setattr(mind.reflection, "due", lambda last_event: True)
+    monkeypatch.setattr(mind.reflection, "reflect", fake_reflect)
+    await mind.handle(AppOpened(package="t", label="TikTok"))
+    clock.advance(timedelta(minutes=9))
+    await mind.tick()
+    assert runs == []
+    clock.advance(timedelta(minutes=1))
+    await mind.tick()
+    assert len(runs) == 1
+
+
+async def test_reflection_runs_when_no_user_activity_seen(mind, monkeypatch):
+    runs = []
+
+    async def fake_reflect():
+        runs.append(1)
+        return True
+
+    monkeypatch.setattr(mind.reflection, "due", lambda last_event: True)
+    monkeypatch.setattr(mind.reflection, "reflect", fake_reflect)
+    await mind.tick()
+    assert runs == [1]
