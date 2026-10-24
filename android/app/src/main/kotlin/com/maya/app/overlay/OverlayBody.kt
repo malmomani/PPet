@@ -132,10 +132,6 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
         }
     }
 
-    override fun toggleVisible() {
-        if (visible) hide() else show()
-    }
-
     /** Screen off or locked: nobody can see her, so stop the frame loop until the user is back. */
     override fun setScreenOn(on: Boolean) {
         if (on == screenOn) return

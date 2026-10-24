@@ -15,6 +15,7 @@ import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import android.text.InputType
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
@@ -117,6 +118,9 @@ class SettingsActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Idempotent: brings Maya back if she should be running but isn't (killed, app updated),
+        // and lets a running service pick up an overlay permission granted while we were away.
+        if (prefs.enabled && prefs.wsUrl() != null) startMayaService()
         refreshStatus()
     }
 
@@ -141,7 +145,7 @@ class SettingsActivity : Activity() {
             // Restart so the service picks up the new address/token/list.
             stopService(Intent(this, MayaService::class.java))
             if (prefs.wsUrl() != null) {
-                startForegroundService(Intent(this, MayaService::class.java))
+                startMayaService()
             } else {
                 prefs.enabled = false
             }
@@ -160,9 +164,19 @@ class SettingsActivity : Activity() {
                 return
             }
             prefs.enabled = true
-            startForegroundService(Intent(this, MayaService::class.java))
+            startMayaService()
         }
         refreshStatus()
+    }
+
+    private fun startMayaService() {
+        try {
+            startForegroundService(Intent(this, MayaService::class.java))
+        } catch (e: IllegalStateException) {
+            // ForegroundServiceStartNotAllowedException (API 31+) is an IllegalStateException. We are
+            // in the foreground, so this should not happen; never crash the settings screen over it.
+            Log.w(TAG, "could not start Maya: ${e.javaClass.simpleName}")
+        }
     }
 
     /** Validates and stores the form. Returns false (with a field error) when something is invalid. */
@@ -326,5 +340,6 @@ class SettingsActivity : Activity() {
 
     companion object {
         private const val REQ_NOTIFICATIONS = 1
+        private const val TAG = "SettingsActivity"
     }
 }

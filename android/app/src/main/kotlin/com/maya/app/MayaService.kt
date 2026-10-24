@@ -30,7 +30,6 @@ import com.maya.core.UserShush
 interface OverlayHook {
     fun handle(a: Action)
     fun setConnected(on: Boolean)
-    fun toggleVisible()
 
     /** False while the screen is off or locked: the overlay pauses its frame loop. */
     fun setScreenOn(on: Boolean)
@@ -58,6 +57,8 @@ class MayaService : Service() {
     private var deviceSense: DeviceSense? = null
     private var running = false
     private var status = Status.NAPPING
+    /** The user hid Maya with the notification's Hide action. */
+    private var overlayHidden = false
 
     override fun onCreate() {
         super.onCreate()
@@ -75,11 +76,13 @@ class MayaService : Service() {
             return Service.START_NOT_STICKY
         }
         if (!running && !startMaya()) return Service.START_NOT_STICKY
-        startOverlay() // no-op if already up; picks up an overlay permission granted since the last start
         when (intent?.action) {
             ACTION_SHH -> emit(UserShush())
-            ACTION_HIDE -> overlay?.toggleVisible()
+            ACTION_HIDE -> toggleHidden()
         }
+        // After the actions, so Hide never creates an overlay only to hide it again. No-op if already
+        // up or hidden; picks up an overlay permission granted since the last start.
+        startOverlay()
         return Service.START_STICKY
     }
 
@@ -128,7 +131,7 @@ class MayaService : Service() {
 
     /** Shows Maya's body if we may draw over other apps. Starts napping until the brain connects. */
     private fun startOverlay() {
-        if (overlayBody != null || !Settings.canDrawOverlays(this)) return
+        if (overlayHidden || overlayBody != null || !Settings.canDrawOverlays(this)) return
         val body = try {
             OverlayBody(this, ::emit)
         } catch (e: Exception) {
@@ -140,6 +143,13 @@ class MayaService : Service() {
         overlayBody = body
         overlay = body
         body.show()
+    }
+
+    /** Hide/Show from the notification. With no overlay yet, showing is left to [startOverlay]. */
+    private fun toggleHidden() {
+        overlayHidden = !overlayHidden
+        val body = overlayBody ?: return
+        if (overlayHidden) body.hide() else body.show()
     }
 
     // ---- senses ----
