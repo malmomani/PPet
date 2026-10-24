@@ -169,6 +169,12 @@ class Initiative:
             self._bump(LONG_SESSION_BUMP, f"User has been on {app[0]} for {app[1]} minutes")
         self._save()
 
+    def engaged(self) -> None:
+        """Maya just answered the user directly: start over and respect the cooldown, but don't count it."""
+        self._urge = 0.0
+        self._last_remark = self.clock.now().isoformat()
+        self._save()
+
     def shush(self) -> None:
         self._urge = 0.0
         self._silent_until = (self.clock.now() + timedelta(minutes=self.cfg.shush_min)).isoformat()

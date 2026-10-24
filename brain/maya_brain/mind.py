@@ -194,6 +194,7 @@ class Mind:
                 await self._emit(Say(text=CANNED_FOGGY, bubble_ms=bubble_ms(CANNED_FOGGY)))
         finally:
             await self._emit(Typing(on=False))
+        self.initiative.engaged()
         if thought is not None:
             await self._apply(thought)
 

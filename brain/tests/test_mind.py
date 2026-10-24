@@ -216,3 +216,24 @@ async def test_hello_resets_screen_state(mind, sent):
     mind.initiative._set_urge(100)
     await mind.handle(Hello(client_version="1", screen_w=1, screen_h=1))
     assert any(a.type == "say" for a in sent)
+
+
+async def test_no_unprompted_remark_right_after_reply(mind, sent, clock):
+    mind.initiative._set_urge(59)
+    await mind.handle(UserMessage(text="hi"))
+    assert mind.initiative.urge == 0
+    mind.initiative._set_urge(100)
+    clock.advance(timedelta(minutes=5))
+    sent.clear()
+    await mind.tick()
+    assert not any(a.type == "say" for a in sent)
+    clock.advance(timedelta(minutes=5))
+    await mind.tick()
+    assert any(a.type == "say" for a in sent)
+
+
+async def test_canned_reply_also_counts_as_engaged(mind, sent):
+    mind.thinker.llm.fail_next = 10
+    mind.initiative._set_urge(100)
+    await mind.handle(UserTap())
+    assert mind.initiative.urge == 0

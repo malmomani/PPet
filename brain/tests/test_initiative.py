@@ -129,3 +129,14 @@ def test_no_base_gain_in_quiet_hours_unless_late_night_pending(ini, clock):
     ini.on_event(Screen(on=True))  # late-night use: +10 and pending
     ini.tick("friend", "curious")
     assert ini.urge == pytest.approx(11)
+
+
+def test_engaged_resets_urge_and_cooldown_without_counting(ini, clock):
+    ini._set_urge(70)
+    ini.engaged()
+    assert ini.urge == 0
+    ini._set_urge(60)
+    assert not ini.should_fire()
+    clock.advance(timedelta(minutes=10))
+    assert ini.should_fire()
+    assert ini._day_count == 0
