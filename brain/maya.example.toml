@@ -25,6 +25,9 @@ timeout_s = 30.0
 think = false
 # Sampling temperature for chat.
 temperature = 0.8
+# Context window (tokens) for chat. Ollama's own default is much smaller and would
+# silently cut off Maya's prompt; lower this only if the model doesn't fit in VRAM.
+num_ctx = 8192
 
 [persona]
 # The companion's name.

@@ -31,7 +31,7 @@ async def test_chat_omits_think_when_none_and_format_when_not_json():
     llm = OllamaLLM(LLMConfig(think=None), transport=httpx.MockTransport(handler))
     assert await llm.chat([{"role": "user", "content": "x"}]) == "hi"
     assert "think" not in seen and "format" not in seen
-    assert seen["options"] == {"temperature": 0.8}
+    assert seen["options"] == {"temperature": 0.8, "num_ctx": 8192}
 
 
 async def test_embed():
@@ -94,3 +94,16 @@ async def test_fake_llm_default_callable_calls_and_reassign():
         await f.embed("x")
     v = await f.embed("hello world")
     assert len(v) == 64 and abs(np.linalg.norm(v) - 1) < 1e-9
+
+
+async def test_chat_sends_num_ctx():
+    seen = {}
+
+    def handler(req):
+        seen.update(json.loads(req.content))
+        return httpx.Response(200, json={"message": {"content": "hi"}})
+
+    await OllamaLLM(LLMConfig(), transport=httpx.MockTransport(handler)).chat([])
+    assert seen["options"]["num_ctx"] == 8192
+    await OllamaLLM(LLMConfig(num_ctx=4096), transport=httpx.MockTransport(handler)).chat([])
+    assert seen["options"]["num_ctx"] == 4096

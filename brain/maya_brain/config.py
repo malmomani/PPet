@@ -24,6 +24,7 @@ class LLMConfig:
     timeout_s: float = 30.0
     think: bool | None = False
     temperature: float = 0.8
+    num_ctx: int = 8192
 
 
 @dataclass

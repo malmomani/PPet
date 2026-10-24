@@ -72,7 +72,7 @@ class OllamaLLM:
             "model": self.cfg.chat_model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": self.cfg.temperature},
+            "options": {"temperature": self.cfg.temperature, "num_ctx": self.cfg.num_ctx},
         }
         if json_mode:
             payload["format"] = "json"
