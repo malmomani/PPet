@@ -162,7 +162,7 @@ class Mind:
         if event.thrown:
             thought = await self._think(Context("event", text))
             if thought is not None:
-                await self._apply(thought)
+                await self._apply(thought, closeness=True)
 
     def _on_offline_summary(self, event: OfflineSummary) -> None:
         totals: dict[str, int] = {}  # insertion order = first-seen label order
@@ -197,14 +197,19 @@ class Mind:
             await self._emit(Typing(on=False))
         self.initiative.engaged()
         if thought is not None:
-            await self._apply(thought)
+            await self._apply(thought, closeness=True)
 
-    async def _apply(self, thought: Thought) -> bool:
-        """Apply a thought to emotion/memory and emit its actions. Returns whether Maya spoke."""
+    async def _apply(self, thought: Thought, closeness: bool = False) -> bool:
+        """Apply a thought to emotion/memory and emit its actions. Returns whether Maya spoke.
+
+        Closeness only moves for thoughts about something the user did to her (`closeness=True`);
+        her own unprompted musings must not make her fonder or colder of the user.
+        """
         before = (self.emotion.mood()[0], self.emotion.tier())
         if thought.mood:
             self.emotion.set_mood(thought.mood, thought.mood_intensity)
-        self.emotion.apply_closeness(thought.closeness_delta)
+        if closeness:
+            self.emotion.apply_closeness(thought.closeness_delta)
         if thought.animation != "idle":
             await self._emit(Animate(name=thought.animation))
         spoke = bool(thought.speak and thought.say)

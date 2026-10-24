@@ -54,11 +54,12 @@ def test_closeness_clamp_and_daily_loss_cap(emo, clock):
     assert emo.closeness == pytest.approx(2)
 
 
-def test_closeness_bounds(emo):
+def test_closeness_bounds(emo, clock):
     assert emo.apply_closeness(-3) == -3
     assert emo.apply_closeness(-3) == -3
     assert emo.apply_closeness(-3) == -2  # daily cap of 8 hit
     for _ in range(40):
+        clock.advance(timedelta(days=1))  # daily gain cap of 8
         emo.apply_closeness(3)
     assert emo.closeness == 100
     assert emo.apply_closeness(3) == 0
@@ -67,7 +68,7 @@ def test_closeness_bounds(emo):
 def test_daily_drift_toward_10(emo, clock):
     for _ in range(10):
         emo.apply_closeness(3)
-        clock.advance(timedelta(minutes=1))
+        clock.advance(timedelta(days=1))  # daily gain cap of 8
     emo.note_interaction()
     clock.advance(timedelta(days=3))
     emo.daily_drift()
@@ -78,6 +79,7 @@ def test_daily_drift_toward_10(emo, clock):
 def test_no_drift_without_interaction_or_when_recent(emo, clock):
     for _ in range(4):
         emo.apply_closeness(3)
+        clock.advance(timedelta(days=1))  # daily gain cap of 8
     emo.daily_drift()
     assert emo.closeness == 22
     emo.note_interaction()
@@ -116,3 +118,13 @@ def test_emotion_persists_across_reopen(tmp_path, clock):
         db1.close()
         if db2 is not None:
             db2.close()
+
+
+def test_daily_gain_cap(emo, clock):
+    for _ in range(5):
+        emo.apply_closeness(3)
+    assert emo.closeness == pytest.approx(10 + 8)
+    assert emo.apply_closeness(3) == 0
+    clock.advance(timedelta(days=1))
+    assert emo.apply_closeness(3) == 3
+    assert emo.closeness == pytest.approx(21)

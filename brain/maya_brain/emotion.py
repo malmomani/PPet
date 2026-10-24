@@ -17,6 +17,7 @@ CLOSENESS_MIN = 0.0
 CLOSENESS_MAX = 100.0
 DELTA_LIMIT = 3.0
 DAILY_LOSS_CAP = 8.0
+DAILY_GAIN_CAP = 8.0
 DRIFT_AFTER_DAYS = 2
 DRIFT_STEP = 1.0
 
@@ -58,6 +59,7 @@ class Emotion:
         self._closeness: float = float(s.get("closeness", CLOSENESS_START))
         self._loss_date: str | None = s.get("loss_date")
         self._loss_today: float = float(s.get("loss_today", 0.0))
+        self._gain_today: float = float(s.get("gain_today", 0.0))
         self._last_interaction: datetime | None = (
             datetime.fromisoformat(s["last_interaction"]) if s.get("last_interaction") else None
         )
@@ -74,6 +76,7 @@ class Emotion:
                 "closeness": self._closeness,
                 "loss_date": self._loss_date,
                 "loss_today": self._loss_today,
+                "gain_today": self._gain_today,
                 "last_interaction": (
                     self._last_interaction.isoformat() if self._last_interaction else None
                 ),
@@ -115,17 +118,22 @@ class Emotion:
 
     def apply_closeness(self, delta: float) -> float:
         today = self._today()
-        if self._loss_date != today:
+        if self._loss_date != today:  # one day key for both daily caps
             self._loss_date = today
             self._loss_today = 0.0
+            self._gain_today = 0.0
         applied = min(DELTA_LIMIT, max(-DELTA_LIMIT, float(delta)))
         if applied < 0:
             applied = max(applied, -(DAILY_LOSS_CAP - self._loss_today))
+        else:
+            applied = min(applied, DAILY_GAIN_CAP - self._gain_today)
         new = min(CLOSENESS_MAX, max(CLOSENESS_MIN, self._closeness + applied))
         applied = new - self._closeness
         self._closeness = new
         if applied < 0:
             self._loss_today -= applied
+        else:
+            self._gain_today += applied
         self._save()
         return applied
 

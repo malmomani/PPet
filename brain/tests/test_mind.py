@@ -244,3 +244,17 @@ async def test_only_user_activity_counts_as_last_event(mind, clock):
     assert mind._last_event is None
     await mind.handle(AppOpened(package="t", label="TikTok"))
     assert mind._last_event == clock.now()
+
+
+async def test_initiative_thought_does_not_change_closeness(mind, sent):
+    mind.initiative._set_urge(100)
+    await mind.tick()
+    assert any(a.type == "say" for a in sent)  # the fake thought proposes closeness_delta +1
+    assert mind.emotion.closeness == 10
+
+
+async def test_only_thrown_drag_changes_closeness(mind):
+    await mind.handle(UserDrag())
+    assert mind.emotion.closeness == 10
+    await mind.handle(UserDrag(thrown=True))
+    assert mind.emotion.closeness == 11
