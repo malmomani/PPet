@@ -123,6 +123,10 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
     override fun setConnected(on: Boolean) {
         connected = on
         behavior.setConnected(on)
+        if (!on) {
+            bubble.typing(false) // a dropped link would otherwise leave "…" up forever
+            chat.close() // messages typed now would be lost
+        }
     }
 
     override fun toggleVisible() {

@@ -37,7 +37,12 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-    )
+    ).apply {
+        // Android 12+ drops touches that pass through another app's overlay unless its alpha is
+        // <= InputManager.getMaximumObscuringOpacityForTouch() (0.8, inclusive); without this the
+        // bubble would silently swallow taps meant for the app underneath.
+        alpha = MAX_PASS_THROUGH_ALPHA
+    }
 
     private var attached = false
     private var bubbleW = 0
@@ -128,6 +133,7 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         const val TYPING = "…"
         const val DEFAULT_BUBBLE_MS = 4000L
         const val MAX_WIDTH_FRACTION = 0.7f
+        const val MAX_PASS_THROUGH_ALPHA = 0.8f
         const val TEXT_COLOR = 0xFF222222.toInt()
         const val BORDER_COLOR = 0xFFCCCCCC.toInt()
     }
