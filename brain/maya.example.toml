@@ -1,0 +1,59 @@
+# Example Maya brain config. Copy to maya.toml and edit.
+# Every key is optional; omitted keys use the defaults shown here.
+
+# Path to the SQLite database file.
+db_path = "maya.db"
+
+[server]
+# Interface the brain server listens on.
+host = "0.0.0.0"
+# TCP port the brain server listens on.
+port = 8765
+# Shared secret clients must present. Change this.
+token = "change-me"
+
+[llm]
+# Base URL of the Ollama server.
+base_url = "http://localhost:11434"
+# Model used for chat and thought generation.
+chat_model = "qwen3:8b"
+# Model used for embeddings (memory search).
+embed_model = "nomic-embed-text"
+# Per-request timeout in seconds.
+timeout_s = 30.0
+# Thinking mode for models that support it (true or false).
+think = false
+# Sampling temperature for chat.
+temperature = 0.8
+
+[persona]
+# The companion's name.
+name = "Maya"
+# Core personality traits that never change.
+core_traits = ["curious", "playful"]
+# Voice and style guidance included in her prompts.
+style = "Short, casual messages, like texting a friend. Uses an emoji sometimes, not every message. Teasing grows as she gets closer to the person."
+
+[initiative]
+# Urge score (0-100) she must reach before speaking up on her own.
+threshold = 60.0
+# Seconds between initiative checks.
+tick_s = 30.0
+# Minimum minutes between unprompted messages.
+cooldown_min = 10
+# Maximum unprompted messages per local day.
+daily_cap = 15
+# Start of quiet hours (local time, HH:MM).
+quiet_start = "23:30"
+# End of quiet hours (local time, HH:MM).
+quiet_end = "08:00"
+# Times per night she may break quiet hours during the 00:00-05:00 window.
+late_night_max = 2
+# Minutes of silence after the user tells her to hush.
+shush_min = 60
+
+[reflection]
+# Local time of day (HH:MM) for the daily reflection.
+time = "04:00"
+# Hours of idleness after which reflection may run early.
+idle_hours = 6.0
