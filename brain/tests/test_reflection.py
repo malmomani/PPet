@@ -233,3 +233,9 @@ async def test_summarize_sends_only_last_60_turns(refl, memory, llm):
     lines = llm.calls[0][1]["content"].splitlines()
     assert len(lines) == 60 and lines[0].endswith("msg 10") and lines[-1].endswith("msg 69")
     assert memory.unsummarized_turns() == []  # older turns are dropped, not left pending
+
+
+async def test_reflect_facts_remove_null(refl, memory, llm):
+    llm.replies = ['{"facts":[{"key":"a","value":"1"}],"remove":null}', '{"traits":[]}', '{"entry":"ok"}']
+    assert await refl.reflect() is True
+    assert memory.facts() == {"a": "1"}

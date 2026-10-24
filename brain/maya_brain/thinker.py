@@ -1,3 +1,4 @@
+import logging
 import math
 import sqlite3
 from dataclasses import dataclass
@@ -11,7 +12,10 @@ from .memory import Memory
 from .persona import Persona
 from .protocol import ANIMATIONS, MOODS
 
+log = logging.getLogger(__name__)
+
 DIRECT_TRIGGERS = {"user_message", "user_tap"}
+LOG_REPLY_CHARS = 500
 
 MAX_SAY = 300
 RETRY_MESSAGE = "That wasn't a valid reply. Respond with ONLY the corrected JSON object."
@@ -159,14 +163,21 @@ class Thinker:
         reply = await self.llm.chat(messages, json_mode=True)
         thought = self._parse(reply, direct)
         if thought is None:
+            first = reply
             messages = messages + [
                 {"role": "assistant", "content": reply},
                 {"role": "user", "content": RETRY_MESSAGE},
             ]
             reply = await self.llm.chat(messages, json_mode=True)
             thought = self._parse(reply, direct)
-        if thought is None:
-            return None
+            if thought is None:
+                log.warning(
+                    "no usable thought for trigger %s after retry; replies: %r / %r",
+                    ctx.trigger,
+                    first[:LOG_REPLY_CHARS],
+                    reply[:LOG_REPLY_CHARS],
+                )
+                return None
         self._store(ctx, thought)
         return thought
 

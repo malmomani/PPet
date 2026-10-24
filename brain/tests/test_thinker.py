@@ -58,3 +58,13 @@ async def test_llm_error_propagates(thinker_with):
     llm.fail_next = 5
     with pytest.raises(LLMError):
         await th.think(Context("user_message", "x"))
+
+
+async def test_two_bad_replies_logged_truncated(thinker_with, caplog):
+    import logging
+
+    th, _ = thinker_with(["garbage", "x" * 1000])
+    with caplog.at_level(logging.WARNING, logger="maya_brain.thinker"):
+        assert await th.think(Context("initiative", "bored")) is None
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "garbage" in text and "x" * 500 in text and "x" * 501 not in text

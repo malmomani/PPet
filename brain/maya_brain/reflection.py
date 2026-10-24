@@ -181,7 +181,7 @@ class Reflection:
             f"Facts you currently know about the user:\n{self._facts_lines()}"
         )
         data = await self._ask(FACTS_TASK, body)
-        facts, remove = data.get("facts"), data.get("remove", [])
+        facts, remove = data.get("facts"), data.get("remove") or []
         if not isinstance(facts, list) or not isinstance(remove, list):
             raise ValueError("bad facts shape")
         updates: dict[str, str] = {}
