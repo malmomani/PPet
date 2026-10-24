@@ -11,8 +11,10 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
+import com.maya.app.overlay.OverlayBody
 import com.maya.app.senses.AppUsageSense
 import com.maya.app.senses.DeviceSense
 import com.maya.core.Action
@@ -43,6 +45,7 @@ class MayaService : Service() {
 
     /** The overlay (Task 10). Actions from the brain are forwarded to it. */
     var overlay: OverlayHook? = null
+    private var overlayBody: OverlayBody? = null
 
     private lateinit var prefs: Prefs
     private var connection: BrainConnection? = null
@@ -68,6 +71,7 @@ class MayaService : Service() {
             return Service.START_NOT_STICKY
         }
         if (!running && !startMaya()) return Service.START_NOT_STICKY
+        startOverlay() // no-op if already up; picks up an overlay permission granted since the last start
         when (intent?.action) {
             ACTION_SHH -> emit(UserShush())
             ACTION_HIDE -> overlay?.toggleVisible()
@@ -77,6 +81,9 @@ class MayaService : Service() {
 
     override fun onDestroy() {
         running = false
+        overlayBody?.destroy()
+        overlayBody = null
+        overlay = null
         stopSenses()
         connection?.stop()
         connection = null
@@ -111,6 +118,23 @@ class MayaService : Service() {
         conn.start()
         startSenses()
         return true
+    }
+
+    // ---- overlay ----
+
+    /** Shows Maya's body if we may draw over other apps. Starts napping until the brain connects. */
+    private fun startOverlay() {
+        if (overlayBody != null || !Settings.canDrawOverlays(this)) return
+        val body = try {
+            OverlayBody(this, ::emit)
+        } catch (e: Exception) {
+            Log.w(TAG, "overlay unavailable: ${e.javaClass.simpleName}")
+            return
+        }
+        body.setConnected(status == Status.HERE)
+        overlayBody = body
+        overlay = body
+        body.show()
     }
 
     // ---- senses ----

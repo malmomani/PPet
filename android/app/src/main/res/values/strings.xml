@@ -30,4 +30,9 @@
     <string name="action_shh">Shh</string>
     <string name="action_hide">Hide</string>
     <string name="toast_need_settings">Set your PC address and token first</string>
+
+    <!-- Overlay -->
+    <string name="chat_hint">Say something to Maya</string>
+    <string name="chat_send">Send</string>
+    <string name="bubble_unreachable">zzz… (can\'t reach your PC)</string>
 </resources>
