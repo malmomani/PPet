@@ -73,3 +73,11 @@ def ini(db, clock):
     from maya_brain.initiative import Initiative
 
     return Initiative(InitiativeConfig(), db, clock)
+
+
+@pytest.fixture
+def refl(llm, memory, persona, db, clock):
+    from maya_brain.config import ReflectionConfig
+    from maya_brain.reflection import Reflection
+
+    return Reflection(llm, memory, persona, db, clock, ReflectionConfig())
