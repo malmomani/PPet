@@ -32,3 +32,10 @@ def persona(db, clock):
     from maya_brain.persona import Persona
 
     return Persona(db, PersonaConfig(), clock)
+
+
+@pytest.fixture
+def emo(db, clock):
+    from maya_brain.emotion import Emotion
+
+    return Emotion(db, clock)
