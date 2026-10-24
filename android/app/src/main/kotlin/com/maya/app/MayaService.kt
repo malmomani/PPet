@@ -10,11 +10,16 @@ import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import android.widget.Toast
+import com.maya.app.senses.AppUsageSense
+import com.maya.app.senses.DeviceSense
 import com.maya.core.Action
+import com.maya.core.AppOpened
 import com.maya.core.DoNotWatch
 import com.maya.core.Event
+import com.maya.core.Screen
 import com.maya.core.UserMessage
 import com.maya.core.UserShush
 
@@ -42,6 +47,8 @@ class MayaService : Service() {
     private lateinit var prefs: Prefs
     private var connection: BrainConnection? = null
     private var doNotWatch = DoNotWatch(emptySet())
+    private var appUsage: AppUsageSense? = null
+    private var deviceSense: DeviceSense? = null
     private var running = false
     private var status = Status.NAPPING
 
@@ -70,6 +77,7 @@ class MayaService : Service() {
 
     override fun onDestroy() {
         running = false
+        stopSenses()
         connection?.stop()
         connection = null
         super.onDestroy()
@@ -101,7 +109,49 @@ class MayaService : Service() {
         val conn = BrainConnection(url, ::onAction, ::onConnected, ::onAuthError, ::screenSize)
         connection = conn
         conn.start()
+        startSenses()
         return true
+    }
+
+    // ---- senses ----
+
+    private fun startSenses() {
+        val usageSense = AppUsageSense(this, doNotWatch)
+        appUsage = usageSense
+        usageSense.start(::emit)
+        val device = DeviceSense(this)
+        deviceSense = device
+        device.start(::onDeviceEvent)
+    }
+
+    private fun stopSenses() {
+        appUsage?.stop()
+        appUsage = null
+        deviceSense?.stop()
+        deviceSense = null
+    }
+
+    /** Screen changes also drive app-usage polling; order matters so the brain sees a tidy sequence. */
+    private fun onDeviceEvent(e: Event) {
+        if (e is Screen) {
+            if (e.on) {
+                emit(e)
+                appUsage?.setScreenOn(true)
+            } else {
+                appUsage?.setScreenOn(false) // emits AppClosed for the current app first
+                emit(e)
+            }
+        } else {
+            emit(e)
+        }
+    }
+
+    /** The brain forgets the current app on hello: tell it the screen state and what is open now. */
+    private fun reemitState() {
+        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
+        emit(Screen(interactive))
+        val current = appUsage?.currentApp() ?: return
+        emit(AppOpened(current.first, current.second))
     }
 
     private fun onAction(a: Action) {
@@ -113,6 +163,7 @@ class MayaService : Service() {
         status = if (on) Status.HERE else Status.NAPPING
         updateNotification()
         overlay?.setConnected(on)
+        if (on) reemitState()
     }
 
     private fun onAuthError() {
