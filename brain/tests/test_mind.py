@@ -289,3 +289,17 @@ async def test_reflection_runs_when_no_user_activity_seen(mind, monkeypatch):
     monkeypatch.setattr(mind.reflection, "reflect", fake_reflect)
     await mind.tick()
     assert runs == [1]
+
+
+async def test_summarize_failure_backs_off_30_min(mind, clock):
+    mind.thinker.llm.replies = ['{"speak":true,"say":"yo"}', "not json", '{"summary":"chat","importance":2}']
+    await mind.handle(UserMessage(text="hi"))
+    clock.advance(timedelta(minutes=11))
+    await mind.tick()  # fails
+    assert len(mind.memory.unsummarized_turns()) == 2
+    clock.advance(timedelta(minutes=29))
+    await mind.tick()  # still backing off
+    assert len(mind.memory.unsummarized_turns()) == 2
+    clock.advance(timedelta(minutes=1))
+    await mind.tick()
+    assert mind.memory.unsummarized_turns() == []

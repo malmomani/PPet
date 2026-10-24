@@ -207,3 +207,29 @@ async def test_llm_down_at_4am_retried_an_hour_later(refl, memory, llm, clock):
     assert "Talked about ramen." in llm.calls[0][1]["content"]  # episode window was not advanced
     assert refl.diary() == [("2026-10-24", "ok")]
     assert refl.due(None) is False
+
+
+async def test_summarize_accepts_numeric_string_importance(refl, memory, llm, db):
+    memory.add_turn("user", "I got the job!")
+    llm.replies = ['{"summary": "The user got the job.", "importance": "4"}']
+    eid = await refl.summarize_pending()
+    assert eid and db.execute("SELECT importance FROM episodes WHERE id=?", (eid,)).fetchone()[0] == 4
+
+
+async def test_summarize_defaults_missing_or_bad_importance_to_3(refl, memory, llm, db):
+    for reply in ('{"summary": "a"}', '{"summary": "b", "importance": "lots"}',
+                  '{"summary": "c", "importance": true}', '{"summary": "d", "importance": "Infinity"}'):
+        memory.add_turn("user", "x")
+        llm.replies = [reply]
+        eid = await refl.summarize_pending()
+        assert eid and db.execute("SELECT importance FROM episodes WHERE id=?", (eid,)).fetchone()[0] == 3, reply
+
+
+async def test_summarize_sends_only_last_60_turns(refl, memory, llm):
+    for i in range(70):
+        memory.add_turn("user", f"msg {i}")
+    llm.replies = ['{"summary": "Lots of talk.", "importance": 2}']
+    assert await refl.summarize_pending()
+    lines = llm.calls[0][1]["content"].splitlines()
+    assert len(lines) == 60 and lines[0].endswith("msg 10") and lines[-1].endswith("msg 69")
+    assert memory.unsummarized_turns() == []  # older turns are dropped, not left pending

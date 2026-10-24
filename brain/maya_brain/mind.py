@@ -42,6 +42,7 @@ CANNED_FOGGY = "…my head's a bit foggy. Try again?"
 
 TAP_THINK_INTERVAL = timedelta(seconds=30)
 SUMMARIZE_IDLE = timedelta(minutes=10)
+SUMMARIZE_RETRY = timedelta(minutes=30)  # back-off after a failed summary
 REFLECT_IDLE = timedelta(minutes=10)  # reflection holds the lock for several LLM calls: not while the user is around
 MIN_APP_USE_S = 120
 
@@ -74,6 +75,7 @@ class Mind:
         self._lock = asyncio.Lock()
         self._last_event: datetime | None = None
         self._last_tap_think: datetime | None = None
+        self._summarize_after: datetime | None = None
         self._connected = True  # the gateway reports the real state; tests and the simulator are always "connected"
         self._screen_on: bool | None = None  # None = unknown (treated as on)
         self.memory = Memory(db, llm, clock)
@@ -244,14 +246,17 @@ class Mind:
             self.emotion.daily_drift()
             if self._can_be_heard():
                 self.initiative.tick(self.emotion.tier(), self.emotion.mood()[0])
+            now = self.clock.now()
             last_turn = self.memory.last_turn_time()
             if (
                 self.memory.unsummarized_turns()
                 and last_turn is not None
-                and self.clock.now() - last_turn >= SUMMARIZE_IDLE
+                and now - last_turn >= SUMMARIZE_IDLE
+                and (self._summarize_after is None or now >= self._summarize_after)
             ):
-                await self.reflection.summarize_pending()
-            user_idle = self._last_event is None or self.clock.now() - self._last_event >= REFLECT_IDLE
+                if await self.reflection.summarize_pending() is None:
+                    self._summarize_after = now + SUMMARIZE_RETRY
+            user_idle = self._last_event is None or now - self._last_event >= REFLECT_IDLE
             if user_idle and self.reflection.due(self._last_event):
                 await self.reflection.reflect()
             await self._maybe_initiate()

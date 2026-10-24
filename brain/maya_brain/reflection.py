@@ -12,6 +12,8 @@ STATE_KEY = "reflection"
 
 RETRY_AFTER = timedelta(minutes=60)  # wait between attempts when a reflection did not complete
 NOON = time(12, 0)
+MAX_SUMMARY_TURNS = 60  # only the most recent turns go to the summarizer; older ones are dropped
+DEFAULT_IMPORTANCE = 3
 
 _JSON_ONLY = "Respond with ONLY a single JSON object, no other text."
 
@@ -60,6 +62,16 @@ def _parse_hhmm(value: str) -> time:
 def reflection_day(now: datetime) -> date:
     """The day a reflection is about: it runs in the small hours, so 04:00 Sunday still belongs to Saturday."""
     return (now - timedelta(hours=12)).date()
+
+
+def _importance(value) -> int:
+    """Lenient: 4, 4.0 and "4" all work; anything else is an average episode."""
+    if isinstance(value, bool):
+        return DEFAULT_IMPORTANCE
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_IMPORTANCE
 
 
 def _clean_str(value) -> str | None:
@@ -123,14 +135,15 @@ class Reflection:
         turns = self.memory.unsummarized_turns()
         if not turns:
             return None
-        transcript = "\n".join(f"[{t.ts.strftime('%H:%M')}] {t.role}: {t.content}" for t in turns)
+        transcript = "\n".join(
+            f"[{t.ts.strftime('%H:%M')}] {t.role}: {t.content}" for t in turns[-MAX_SUMMARY_TURNS:]
+        )
         try:
             data = await self._ask(SUMMARY_TASK, transcript)
             summary = _clean_str(data.get("summary"))
-            importance = data.get("importance")
-            if summary is None or isinstance(importance, bool) or not isinstance(importance, (int, float)):
+            if summary is None:
                 raise ValueError("bad summary shape")
-            episode_id = await self.memory.add_episode(summary, int(importance))
+            episode_id = await self.memory.add_episode(summary, _importance(data.get("importance")))
         except (LLMError, ValueError):
             return None
         self.memory.mark_summarized()
