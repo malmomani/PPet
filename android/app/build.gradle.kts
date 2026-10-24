@@ -31,5 +31,6 @@ android {
 
 dependencies {
     implementation("com.maya:core")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
 }
