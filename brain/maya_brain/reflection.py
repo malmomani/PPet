@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 
 from .clock import Clock
 from .config import ReflectionConfig
@@ -9,6 +9,9 @@ from .memory import Episode, Memory
 from .persona import TRAIT_KINDS, Persona, TraitUpdate
 
 STATE_KEY = "reflection"
+
+RETRY_AFTER = timedelta(minutes=60)  # wait between attempts when a reflection did not complete
+NOON = time(12, 0)
 
 _JSON_ONLY = "Respond with ONLY a single JSON object, no other text."
 
@@ -41,8 +44,9 @@ TRAITS_TASK = (
 )
 
 DIARY_TASK = (
-    "Write today's diary entry, in the first person and in your own voice: what happened, how "
-    "you felt, what you want to remember or look forward to. A short paragraph, honest and "
+    "Write your diary entry for the day named below (it may already be past midnight), in the "
+    "first person and in your own voice: what happened, how you felt, what you want to "
+    "remember or look forward to. A short paragraph, honest and "
     "personal. If little happened, say so briefly.\n"
     f'{_JSON_ONLY} Format: {{"entry": "<text>"}}'
 )
@@ -51,6 +55,11 @@ DIARY_TASK = (
 def _parse_hhmm(value: str) -> time:
     hour, minute = value.split(":")
     return time(int(hour), int(minute))
+
+
+def reflection_day(now: datetime) -> date:
+    """The day a reflection is about: it runs in the small hours, so 04:00 Sunday still belongs to Saturday."""
+    return (now - timedelta(hours=12)).date()
 
 
 def _clean_str(value) -> str | None:
@@ -80,12 +89,22 @@ class Reflection:
         self.cfg = cfg
 
     # --- scheduling ---
+    def _scheduled(self, day: date, now: datetime) -> datetime:
+        """When the reflection for `day` is scheduled: the configured time within [day 12:00, day+1 12:00)."""
+        at = _parse_hhmm(self.cfg.time)
+        scheduled = datetime.combine(day, at, tzinfo=now.tzinfo)
+        return scheduled + timedelta(days=1) if at < NOON else scheduled
+
     def due(self, last_event: datetime | None) -> bool:
         now = self.clock.now()
+        day = reflection_day(now)
         state = get_state(self.db, STATE_KEY) or {}
-        if state.get("last_date") == now.date().isoformat():
+        if state.get("last_date") == day.isoformat():
             return False
-        if now.time() >= _parse_hhmm(self.cfg.time):
+        last_attempt = state.get("last_attempt_at")
+        if last_attempt is not None and now - datetime.fromisoformat(last_attempt) < RETRY_AFTER:
+            return False
+        if now >= self._scheduled(day, now):
             return True
         if last_event is not None:
             return (now - last_event).total_seconds() > self.cfg.idle_hours * 3600
@@ -123,7 +142,7 @@ class Reflection:
         try:
             since = datetime.fromisoformat(state["last_at"])
         except (KeyError, TypeError, ValueError):
-            since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            since = datetime.combine(reflection_day(now), time(0), tzinfo=now.tzinfo)
         # Strictly after: an episode written at the instant of the last reflection was covered by it.
         return [e for e in self.memory.episodes_since(since) if e.created_at > since]
 
@@ -183,16 +202,16 @@ class Reflection:
                 updates.append(TraitUpdate(kind, text, action))  # type: ignore[arg-type]
         self.persona.apply_updates(updates)
 
-    async def _write_diary(self, episodes: str) -> None:
-        data = await self._ask(DIARY_TASK, f"What happened today:\n{episodes}")
+    async def _write_diary(self, episodes: str, day: date) -> None:
+        body = f"Diary entry for {day.strftime('%A')}, {day.isoformat()}.\nWhat happened:\n{episodes}"
+        data = await self._ask(DIARY_TASK, body)
         entry = _clean_str(data.get("entry"))
         if entry is None:
             raise ValueError("bad diary shape")
-        now = self.clock.now()
         self.db.execute(
             "INSERT INTO diary(date, entry, created_at) VALUES(?, ?, ?) "
             "ON CONFLICT(date) DO UPDATE SET entry = excluded.entry, created_at = excluded.created_at",
-            (now.date().isoformat(), entry, now.isoformat()),
+            (day.isoformat(), entry, self.clock.now().isoformat()),
         )
 
     async def reflect(self) -> bool:
@@ -204,12 +223,18 @@ class Reflection:
                 await step(episodes)
             except (LLMError, ValueError):
                 pass  # one failing step must not stop the others
+        now = self.clock.now()
+        day = reflection_day(now)
         try:
-            await self._write_diary(episodes)
+            await self._write_diary(episodes, day)
         except (LLMError, ValueError):
             diary_written = False
-        now = self.clock.now()
-        set_state(self.db, STATE_KEY, {"last_date": now.date().isoformat(), "last_at": now.isoformat()})
+        state = get_state(self.db, STATE_KEY) or {}
+        state["last_attempt_at"] = now.isoformat()
+        if diary_written:  # otherwise the day stays open and is retried after RETRY_AFTER
+            state["last_date"] = day.isoformat()
+            state["last_at"] = now.isoformat()
+        set_state(self.db, STATE_KEY, state)
         return diary_written
 
     def diary(self, limit: int = 7) -> list[tuple[str, str]]:

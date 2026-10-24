@@ -1,5 +1,11 @@
 from datetime import timedelta
 
+from maya_brain.db import get_state
+
+
+def _at_4am_next_day(clock):
+    clock.set(clock.now().replace(hour=4, minute=0) + timedelta(days=1))  # Sun 2026-10-25 04:00
+
 
 async def test_summarize_pending(refl, memory, llm):
     llm.replies = ['{"summary": "The user said they love ramen.", "importance": 4}']
@@ -74,10 +80,11 @@ async def test_reflect_step_failure_isolated(refl, llm):
     assert await refl.reflect() is True
 
 
-async def test_reflect_diary_failure_returns_false_but_records(refl, llm, clock):
+async def test_reflect_diary_failure_returns_false_and_is_not_recorded(refl, llm, clock, db):
     llm.replies = ['{"facts":[],"remove":[]}', '{"traits":[]}', "bad"]
     assert await refl.reflect() is False
     assert refl.diary() == []
+    assert "last_date" not in get_state(db, "reflection")
     assert refl.due(None) is False
 
 
@@ -127,8 +134,8 @@ async def test_diary_upsert_and_order(refl, clock, llm):
     assert refl.diary(limit=1) == [("2026-10-25", "third")]
 
 
-def test_due(refl, clock):  # clock at 14:00 local
-    assert refl.due(None) is True
+def test_due(refl, clock):  # clock at Sat 14:00 local
+    assert refl.due(None) is False  # Saturday's reflection is scheduled for Sunday 04:00
     clock.set(clock.now().replace(hour=2))
     assert refl.due(clock.now()) is False
     assert refl.due(clock.now() - timedelta(hours=7)) is True
@@ -136,10 +143,12 @@ def test_due(refl, clock):  # clock at 14:00 local
 
 async def test_once_per_day(refl, clock, llm):
     llm.replies = ['{"facts":[],"remove":[]}', '{"traits":[]}', '{"entry":"a"}']
-    await refl.reflect()
+    await refl.reflect()  # Sat 14:00: reflects (and uses up) Saturday
     assert refl.due(None) is False
+    _at_4am_next_day(clock)
+    assert refl.due(None) is False  # still Saturday's reflection day
     clock.advance(timedelta(days=1))
-    assert refl.due(None) is True
+    assert refl.due(None) is True  # Mon 04:00: Sunday's turn
 
 
 async def test_episodes_only_since_last_reflection(refl, memory, llm, clock):
@@ -163,3 +172,38 @@ async def test_episodes_only_since_last_reflection(refl, memory, llm, clock):
     await refl.reflect()
     facts_prompt = llm.calls[1][1]["content"]
     assert "New episode." in facts_prompt and "Old episode." not in facts_prompt
+
+
+def test_due_at_scheduled_time_after_midnight(refl, clock):
+    clock.set(clock.now().replace(hour=3, minute=59) + timedelta(days=1))
+    assert refl.due(None) is False
+    _at_4am_next_day(clock)
+    assert refl.due(None) is True
+
+
+async def test_diary_keyed_to_reflection_day(refl, llm, clock):
+    _at_4am_next_day(clock)
+    llm.replies = ['{"facts":[],"remove":[]}', '{"traits":[]}', '{"entry":"what a saturday"}']
+    assert await refl.reflect() is True
+    assert refl.diary() == [("2026-10-24", "what a saturday")]
+    assert "Saturday, 2026-10-24" in llm.calls[-1][1]["content"]
+    assert refl.due(None) is False
+
+
+async def test_llm_down_at_4am_retried_an_hour_later(refl, memory, llm, clock):
+    await memory.add_episode("Talked about ramen.", 3)  # Sat 14:00
+    _at_4am_next_day(clock)
+    assert refl.due(None) is True
+    llm.fail_next = 100
+    assert await refl.reflect() is False
+    clock.advance(timedelta(minutes=59))
+    assert refl.due(None) is False  # backing off
+    clock.advance(timedelta(minutes=1))
+    assert refl.due(None) is True  # same reflection day, retried
+    llm.fail_next = 0
+    llm.calls.clear()
+    llm.replies = ['{"facts":[],"remove":[]}', '{"traits":[]}', '{"entry":"ok"}']
+    assert await refl.reflect() is True
+    assert "Talked about ramen." in llm.calls[0][1]["content"]  # episode window was not advanced
+    assert refl.diary() == [("2026-10-24", "ok")]
+    assert refl.due(None) is False
