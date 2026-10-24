@@ -43,7 +43,7 @@ Create your config and set a secret token:
 - Linux / macOS: `cp maya.example.toml maya.toml`
 - Windows: `copy maya.example.toml maya.toml`
 
-Open `maya.toml` and replace `token = "change-me"` under `[server]` with a long random string, for example the output of `python -c "import secrets; print(secrets.token_urlsafe(32))"`. The server refuses to start while the token is still `change-me`. `maya.toml` is git-ignored.
+Open `maya.toml` and replace `token = "change-me"` under `[server]` with a long random string, for example the output of `python -c "import secrets; print(secrets.token_urlsafe(32))"`. The server refuses to start while the token is still `change-me` or shorter than 16 characters. `maya.toml` is git-ignored.
 
 ## Run the simulator
 
@@ -68,7 +68,7 @@ Type plain text to talk to Maya. Slash commands inject events on a virtual clock
 | `/tap`, `/throw`, `/shush` | Tap, throw, or ask Maya to be quiet for a while |
 | `/app <Label>`, `/close` | Open an app (e.g. `/app TikTok`); close it and report how long it was open |
 | `/screen on\|off`, `/charge on\|off` | Screen and charger events |
-| `/time HH:MM` | Set the virtual clock to that time today |
+| `/time HH:MM` | Jump the virtual clock forward to the next HH:MM (today or tomorrow) |
 | `/skip 90m\|3h\|2d` | Advance the clock, letting Maya's periodic thinking run along the way |
 | `/reflect` | Run the daily reflection now (facts, traits, diary) |
 | `/thoughts`, `/mood`, `/facts`, `/traits`, `/diary`, `/status` | Look inside Maya |
