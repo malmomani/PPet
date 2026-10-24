@@ -118,7 +118,10 @@ class Reflection:
             return False
         if now >= self._scheduled(day, now):
             return True
-        if last_event is not None:
+        # Idle shortcut only once the user has done something in this reflection day,
+        # otherwise noon (the day rollover) would trigger an empty reflection.
+        day_start = datetime.combine(day, NOON, tzinfo=now.tzinfo)
+        if last_event is not None and last_event >= day_start:
             return (now - last_event).total_seconds() > self.cfg.idle_hours * 3600
         return False
 

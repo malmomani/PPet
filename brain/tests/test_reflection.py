@@ -174,6 +174,15 @@ async def test_episodes_only_since_last_reflection(refl, memory, llm, clock):
     assert "New episode." in facts_prompt and "Old episode." not in facts_prompt
 
 
+def test_idle_shortcut_needs_activity_in_reflection_day(refl, clock):
+    # Sun 12:00 starts Sunday's reflection day; idle since Sat 23:00 must not trigger it early
+    clock.set(clock.now().replace(hour=12) + timedelta(days=1))
+    assert refl.due(clock.now() - timedelta(hours=13)) is False
+    # activity after Sun 12:00 followed by 6h+ of idling does
+    clock.advance(timedelta(hours=8))
+    assert refl.due(clock.now() - timedelta(hours=7)) is True
+
+
 def test_due_at_scheduled_time_after_midnight(refl, clock):
     clock.set(clock.now().replace(hour=3, minute=59) + timedelta(days=1))
     assert refl.due(None) is False
