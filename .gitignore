@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 maya.toml
 *.egg-info/
+android/**/build/
+android/.gradle/
+android/core/.gradle/
+android/local.properties
+*.apk

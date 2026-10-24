@@ -1,0 +1,42 @@
+name: android
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Test core
+        run: ./gradlew -p core test
+
+      - name: Build debug APK and run app unit tests
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maya-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
