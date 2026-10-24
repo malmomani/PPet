@@ -1,5 +1,6 @@
 package com.maya.app
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -30,6 +31,9 @@ interface OverlayHook {
     fun handle(a: Action)
     fun setConnected(on: Boolean)
     fun toggleVisible()
+
+    /** False while the screen is off or locked: the overlay pauses its frame loop. */
+    fun setScreenOn(on: Boolean)
 }
 
 /**
@@ -132,6 +136,7 @@ class MayaService : Service() {
             return
         }
         body.setConnected(status == Status.HERE)
+        body.setScreenOn(screenUsable())
         overlayBody = body
         overlay = body
         body.show()
@@ -161,7 +166,9 @@ class MayaService : Service() {
             if (e.on) {
                 emit(e)
                 appUsage?.setScreenOn(true)
+                overlay?.setScreenOn(true)
             } else {
+                overlay?.setScreenOn(false)
                 appUsage?.setScreenOn(false) // emits AppClosed for the current app first
                 emit(e)
             }
@@ -176,6 +183,13 @@ class MayaService : Service() {
         emit(Screen(interactive))
         val current = appUsage?.currentApp() ?: return
         emit(AppOpened(current.first, current.second))
+    }
+
+    /** The screen is on and unlocked, i.e. the user can actually see Maya. */
+    private fun screenUsable(): Boolean {
+        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
+        val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked ?: false
+        return interactive && !locked
     }
 
     private fun onAction(a: Action) {

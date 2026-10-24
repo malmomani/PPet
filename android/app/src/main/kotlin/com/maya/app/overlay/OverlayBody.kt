@@ -42,6 +42,7 @@ private const val TAG = "MayaOverlay"
 /**
  * Maya's floating body: a sprite-sized overlay window near the bottom of the screen, moved by a
  * ~30 fps Choreographer loop that drives [Behavior], plus her speech bubble and the chat window.
+ * The loop only runs while she is visible and the screen is on and unlocked ([setScreenOn]).
  * Must be created and used on the main thread.
  */
 class OverlayBody(context: Context, private val emit: (Event) -> Unit) : OverlayHook {
@@ -72,6 +73,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
     private var visible = false
     private var destroyed = false
     private var looping = false
+    private var screenOn = true
     private var lastFrameNs = 0L
     private var sizeCheckMs = 0L
 
@@ -89,11 +91,12 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
             if (!looping) return
             if (lastFrameNs == 0L) lastFrameNs = frameTimeNanos
             val dtMs = (frameTimeNanos - lastFrameNs) / 1_000_000L
-            if (dtMs >= FRAME_MS) {
-                lastFrameNs = frameTimeNanos
+            if (dtMs > 0L) {
+                lastFrameNs += dtMs * 1_000_000L // keep the sub-millisecond remainder
                 step(dtMs.coerceAtMost(MAX_DT_MS))
             }
-            choreographer.postFrameCallback(this)
+            // ~30 fps: wake up again after FRAME_MS instead of on every vsync.
+            choreographer.postFrameCallbackDelayed(this, FRAME_MS)
         }
     }
 
@@ -133,6 +136,17 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
         if (visible) hide() else show()
     }
 
+    /** Screen off or locked: nobody can see her, so stop the frame loop until the user is back. */
+    override fun setScreenOn(on: Boolean) {
+        if (on == screenOn) return
+        screenOn = on
+        if (on) {
+            if (visible) startLoop()
+        } else {
+            stopLoop()
+        }
+    }
+
     // ---- lifecycle ----
 
     fun show() {
@@ -140,7 +154,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
         refreshScreenSize()
         if (!addSafely(wm, spriteView, params)) return
         visible = true
-        startLoop()
+        if (screenOn) startLoop()
     }
 
     fun hide() {
@@ -164,7 +178,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
     // ---- frame loop ----
 
     private fun startLoop() {
-        if (looping) return
+        if (looping || destroyed) return
         looping = true
         lastFrameNs = 0L
         choreographer.postFrameCallback(frameCallback)
