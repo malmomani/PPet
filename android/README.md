@@ -22,12 +22,15 @@ You need: the Maya brain already set up on your PC (see [`../brain/README.md`](.
 3. Android will say it can't install unknown apps. Tap **Settings**, switch on **Allow from this source**, go back, and tap **Install**.
 4. If Play Protect warns about the app, choose **Install anyway**. It's your own app.
 
+One-time note: if you installed an earlier Maya build (from before the app got a fixed signing key), uninstall it once first, otherwise Android refuses the install. After that, new builds install over the old one.
+
 ## 3. Start the brain on the PC
 
 1. Open PowerShell in the `brain` folder and activate it: `.venv\Scripts\Activate.ps1`
 2. Run: `python -m maya_brain --config maya.toml`
 3. It prints lines like `ws://192.168.1.20:8765/ws`. The numbers in the middle are your **PC address** (here `192.168.1.20`). Ignore `127.0.0.1`.
    - Not sure which one? Open a PowerShell window and run `ipconfig`. Use the **IPv4 Address** under **Wireless LAN adapter Wi-Fi**.
+   - Away from home? If you use Tailscale on the PC and phone, you can use the PC's Tailscale address instead (see the brain guide).
 4. The **port** is `8765`.
 5. The **token** is the long secret you put under `[server]` in `maya.toml`.
 
@@ -58,15 +61,15 @@ New-NetFirewallRule -DisplayName "Maya brain" -Direction Inbound -Protocol TCP -
    - **Draw over other apps**: find Maya, switch it on.
    - **Usage access (which app is open)**: find Maya, switch it on. This lets her comment on the apps you use.
    - **Notifications**: tap **Allow**.
-   - **Ignore battery optimisation**: choose **Allow** for Maya.
+   - **Ignore battery optimisation**: this opens a list of apps. At the top, switch the filter to **All apps**, find **Maya**, and choose **Don't optimise** (the wording varies on Samsung). The Samsung **Unrestricted** step in section 6 matters most, so do that too.
 5. Do the Samsung battery steps below, then come back.
-6. Tap **Start Maya**. She should appear on screen and the notification says "Maya is here".
+6. Tap **Start Maya**. She should appear on screen. The notification first says "Maya is napping" and changes to "Maya is here" once she's connected to your PC.
 
 Tap Maya to chat. The notification has **Shh** (be quiet for a while) and **Hide** (hide her from the screen).
 
 ## 6. Samsung battery settings (important)
 
-Samsung's One UI puts apps to sleep, which stops Maya. Do both of these:
+Samsung's One UI puts apps to sleep, which stops Maya. Menu names vary a little between One UI versions. Do both of these:
 
 1. **Settings** → **Battery** → **Background usage limits**:
    - Make sure Maya is **not** in **Sleeping apps** or **Deep sleeping apps**. If she is, remove her.
@@ -91,6 +94,6 @@ Maya's pictures live in `android/app/src/main/assets/sprites/`:
 - `maya.png`: one sheet with one row per animation.
 - `sprites.json`: describes the sheet: `frame_w` and `frame_h` (size of one frame), and for each animation its `row`, number of `frames`, `fps` and whether it `loop`s.
 
-To use your own art, replace those two files, keeping the animation names (idle, walk, sit, nap, wave, peek, happy, sulk, surprised). To get the placeholder art back, run `python3 android/tools/make_placeholder_sprites.py`.
+To use your own art, replace those two files, keeping the animation names (idle, walk, sit, nap, wave, peek, happy, sulk, surprised). To get the placeholder art back, run this from the repo root: `python android/tools/make_placeholder_sprites.py` (on Windows; use `python3` on Linux/macOS).
 
-Then commit and push. The **android** workflow builds a new APK; download and install it as in steps 1 and 2 (it installs over the old one and keeps your settings).
+Then commit and push (the phone only gets new art from a new APK). The **android** workflow builds one; download and install it as in steps 1 and 2. It installs over the old one and keeps your settings.
