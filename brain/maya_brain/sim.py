@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import re
+import sqlite3
 import sys
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -47,7 +48,7 @@ HELP = """Commands:
   /close            close the current app (reports how long it was open)
   /screen on|off    turn the phone screen on or off
   /charge on|off    plug in or unplug the charger
-  /time HH:MM       set the virtual clock to that time today
+  /time HH:MM       jump the virtual clock forward to the next HH:MM (today or tomorrow)
   /skip <N>m|h|d    advance the virtual clock, up to 30d (e.g. /skip 90m, /skip 3h, /skip 2d)
   /reflect          run Maya's reflection now (facts, traits, diary)
   /thoughts         Maya's last 5 private thoughts
@@ -96,7 +97,10 @@ def parse_command(line: str, now: datetime) -> tuple[str, object]:
         m = _TIME_RE.match(arg)
         if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
             return help_
-        return "time", now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        target = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)  # the virtual clock only moves forward
+        return "time", target
     if cmd == "skip":
         m = _SKIP_RE.match(arg.lower())
         if not m or int(m.group(1)) == 0:
@@ -235,6 +239,14 @@ async def run_sim(
         except Exception as exc:  # one bad line must never kill the REPL
             write(f"[error {type(exc).__name__}: {exc}]")
 
+def start_time(db: sqlite3.Connection, now: datetime) -> datetime:
+    """Start the virtual clock no earlier than the newest stored turn, so time never runs backwards."""
+    row = db.execute("SELECT ts FROM turns ORDER BY id DESC LIMIT 1").fetchone()
+    if row is None:
+        return now
+    return max(now, datetime.fromisoformat(row["ts"]).astimezone(now.tzinfo))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="maya_brain.sim", description="Chat with Maya in the terminal")
     parser.add_argument("--config", default="maya.toml", help="path to config TOML (default: maya.toml)")
@@ -245,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(Path(args.config))
     llm = FakeLLM() if args.fake_llm else OllamaLLM(cfg.llm)
     db = open_db(args.db)
-    clock = FakeClock(datetime.now().astimezone())
+    clock = FakeClock(start_time(db, datetime.now().astimezone()))
     mind = Mind(cfg, llm, db, clock)
 
     print("Maya simulator. Type /help for commands, /quit to leave.")

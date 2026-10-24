@@ -121,3 +121,13 @@ def test_state_roundtrip(db):
 def test_open_db_creates_all_tables(db):
     names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"turns", "episodes", "facts", "traits", "thoughts", "diary", "state"} <= names
+
+
+def test_turns_ordered_by_id_even_if_clock_went_back(mem):
+    m, clock = mem
+    m.add_turn("user", "first")
+    clock.advance(timedelta(hours=-1))  # e.g. a simulator time jump or an NTP correction
+    m.add_turn("maya", "second")
+    assert [t.content for t in m.recent_turns()] == ["first", "second"]
+    assert [t.content for t in m.unsummarized_turns()] == ["first", "second"]
+    assert m.last_turn_time() == datetime(2026, 10, 24, 11, tzinfo=timezone.utc)

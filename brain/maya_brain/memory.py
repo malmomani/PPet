@@ -35,7 +35,10 @@ def _episode(row: sqlite3.Row, score: float = 0.0) -> Episode:
 
 
 class Memory:
-    """Three layers: short-term turn buffer, embedded episodes, key/value facts."""
+    """Three layers: short-term turn buffer, embedded episodes, key/value facts.
+
+    Turns are ordered by insertion (id), not by ts: the clock can jump (simulator, NTP).
+    """
 
     def __init__(self, db: sqlite3.Connection, llm: LLM, clock: Clock, buffer_size: int = 20):
         self.db = db
@@ -52,12 +55,12 @@ class Memory:
 
     def recent_turns(self) -> list[Turn]:
         rows = self.db.execute(
-            "SELECT * FROM turns ORDER BY ts DESC, id DESC LIMIT ?", (self.buffer_size,)
+            "SELECT * FROM turns ORDER BY id DESC LIMIT ?", (self.buffer_size,)
         ).fetchall()
         return [_turn(r) for r in reversed(rows)]
 
     def unsummarized_turns(self) -> list[Turn]:
-        rows = self.db.execute("SELECT * FROM turns WHERE summarized = 0 ORDER BY ts, id").fetchall()
+        rows = self.db.execute("SELECT * FROM turns WHERE summarized = 0 ORDER BY id").fetchall()
         return [_turn(r) for r in rows]
 
     def mark_summarized(self) -> None:
@@ -68,7 +71,7 @@ class Memory:
             return None
         marks = ",".join("?" * len(roles))
         row = self.db.execute(
-            f"SELECT ts FROM turns WHERE role IN ({marks}) ORDER BY ts DESC, id DESC LIMIT 1", roles
+            f"SELECT ts FROM turns WHERE role IN ({marks}) ORDER BY id DESC LIMIT 1", roles
         ).fetchone()
         return None if row is None else datetime.fromisoformat(row["ts"])
 

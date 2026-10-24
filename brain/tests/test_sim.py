@@ -10,7 +10,7 @@ from maya_brain.protocol import (
     UserShush,
     UserTap,
 )
-from maya_brain.sim import main, parse_command, run_sim
+from maya_brain.sim import main, parse_command, run_sim, start_time
 
 NOW = datetime(2026, 10, 24, 14, 0).astimezone()
 
@@ -39,8 +39,9 @@ def test_parse_command_details():
     assert parse_command("/charge on", NOW)[1].on is True
     assert isinstance(parse_command("/charge off", NOW)[1], Charging)
     assert parse_command("/skip 2d", NOW) == ("skip", timedelta(days=2))
-    when = parse_command("/time 02:30", NOW)[1]
-    assert (when.date(), when.hour, when.minute) == (NOW.date(), 2, 30) and when.tzinfo is not None
+    when = parse_command("/time 02:30", NOW)[1]  # already past today: tomorrow's 02:30
+    assert (when.date(), when.hour, when.minute) == (NOW.date() + timedelta(days=1), 2, 30)
+    assert when.tzinfo is not None
     for name in ("thoughts", "facts", "traits", "diary", "status"):
         assert parse_command(f"/{name}", NOW) == ("show", name)
     assert parse_command("/reflect", NOW) == ("reflect", None)
@@ -159,3 +160,27 @@ async def test_exception_in_dispatch_does_not_end_session(mind, clock, monkeypat
     out = await run_lines(mind, clock, "/mood", "/facts", "/quit")
     assert "[error ValueError: bad status]" in out
     assert "(none)" in out
+
+
+def test_time_jumps_forward_to_next_occurrence():
+    assert parse_command("/time 15:30", NOW) == ("time", NOW.replace(hour=15, minute=30))
+    assert parse_command("/time 14:00", NOW) == ("time", NOW + timedelta(days=1))
+    assert parse_command("/time 09:00", NOW) == ("time", NOW.replace(hour=9) + timedelta(days=1))
+
+
+async def test_time_never_moves_clock_backwards(mind, clock):
+    start = clock.now()
+    await run_lines(mind, clock, "/time 02:00", "/quit")
+    assert clock.now() > start
+
+
+def test_start_time_is_after_newest_turn(db):
+    from maya_brain.memory import Memory
+    from maya_brain.clock import FakeClock
+    from maya_brain.llm import FakeLLM
+
+    real_now = datetime.now().astimezone()
+    assert start_time(db, real_now) == real_now
+    future = real_now + timedelta(days=3)
+    Memory(db, FakeLLM(), FakeClock(future)).add_turn("user", "from a sim session that skipped ahead")
+    assert start_time(db, real_now) == future
