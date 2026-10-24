@@ -8,3 +8,4 @@ android/.gradle/
 android/core/.gradle/
 android/local.properties
 *.apk
+android/**/.kotlin/
