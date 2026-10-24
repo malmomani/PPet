@@ -21,6 +21,7 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -65,6 +66,10 @@ class SettingsActivity : Activity() {
         root.addView(hostField, matchWrap(top = 4))
         root.addView(portField, matchWrap(top = 4))
         root.addView(tokenField, matchWrap(top = 4))
+        val showToken = CheckBox(this)
+        showToken.setText(R.string.show_token)
+        showToken.setOnCheckedChangeListener { _, checked -> setTokenVisible(checked) }
+        root.addView(showToken, wrapWrap())
         val saveButton = Button(this)
         saveButton.setText(R.string.save)
         saveButton.setOnClickListener { onSaveClicked() }
@@ -177,6 +182,17 @@ class SettingsActivity : Activity() {
             // in the foreground, so this should not happen; never crash the settings screen over it.
             Log.w(TAG, "could not start Maya: ${e.javaClass.simpleName}")
         }
+    }
+
+    /** Switches the token field between hidden (password dots) and readable, keeping the cursor at the end. */
+    private fun setTokenVisible(visible: Boolean) {
+        val variation = if (visible) {
+            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        } else {
+            InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        tokenField.inputType = InputType.TYPE_CLASS_TEXT or variation
+        tokenField.setSelection(tokenField.text.length)
     }
 
     /** Validates and stores the form. Returns false (with a field error) when something is invalid. */

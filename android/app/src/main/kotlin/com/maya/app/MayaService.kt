@@ -184,6 +184,7 @@ class MayaService : Service() {
     /** Hide/Show from the notification. With no overlay yet, showing is left to [startOverlay]. */
     private fun toggleHidden() {
         overlayHidden = !overlayHidden
+        updateNotification() // the action now reads Show / Hide
         val body = overlayBody ?: return
         if (overlayHidden) body.hide() else body.show()
     }
@@ -300,6 +301,7 @@ class MayaService : Service() {
         val shh = PendingIntent.getService(this, 1, Intent(this, MayaService::class.java).setAction(ACTION_SHH), piFlags)
         val hide = PendingIntent.getService(this, 2, Intent(this, MayaService::class.java).setAction(ACTION_HIDE), piFlags)
         val icon = Icon.createWithResource(this, R.drawable.ic_maya)
+        val hideLabel = if (overlayHidden) R.string.action_show else R.string.action_hide
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_maya)
             .setContentTitle(getString(R.string.app_name))
@@ -309,7 +311,7 @@ class MayaService : Service() {
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .addAction(Notification.Action.Builder(icon, getString(R.string.action_shh), shh).build())
-            .addAction(Notification.Action.Builder(icon, getString(R.string.action_hide), hide).build())
+            .addAction(Notification.Action.Builder(icon, getString(hideLabel), hide).build())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }

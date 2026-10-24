@@ -8,6 +8,7 @@
     <string name="hint_host">PC address (e.g. 192.168.1.20 or a Tailscale name)</string>
     <string name="hint_port">Port</string>
     <string name="hint_token">Token</string>
+    <string name="show_token">Show token</string>
     <string name="save">Save</string>
     <string name="saved">Saved</string>
     <string name="error_port">Port must be 1–65535</string>
@@ -29,6 +30,7 @@
     <string name="notif_auth">Check the token in settings</string>
     <string name="action_shh">Shh</string>
     <string name="action_hide">Hide</string>
+    <string name="action_show">Show</string>
     <string name="toast_need_settings">Set your PC address and token first</string>
 
     <!-- Overlay -->

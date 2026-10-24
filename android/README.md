@@ -22,7 +22,7 @@ You need: the Maya brain already set up on your PC (see [`../brain/README.md`](.
 3. Android will say it can't install unknown apps. Tap **Settings**, switch on **Allow from this source**, go back, and tap **Install**.
 4. If Play Protect warns about the app, choose **Install anyway**. It's your own app.
 
-One-time note: if you installed an earlier Maya build (from before the app got a fixed signing key), uninstall it once first, otherwise Android refuses the install. After that, new builds install over the old one.
+One-time note: if you installed an earlier Maya build (from before the app got a fixed signing key), uninstall it once first, otherwise Android refuses the install. Uninstalling also erases Maya's saved PC address and token and her permissions, so after installing the new build redo **5. Pair the app** (address, token and every permission) and **6. Samsung battery settings**. After that, new builds install over the old one and keep everything.
 
 ## 3. Start the brain on the PC
 
@@ -65,7 +65,7 @@ New-NetFirewallRule -DisplayName "Maya brain" -Direction Inbound -Protocol TCP -
 5. Do the Samsung battery steps below, then come back.
 6. Tap **Start Maya**. She should appear on screen. The notification first says "Maya is napping" and changes to "Maya is here" once she's connected to your PC.
 
-Tap Maya to chat. The notification has **Shh** (be quiet for a while) and **Hide** (hide her from the screen).
+Tap Maya to chat. The notification has **Shh** (be quiet for a while) and **Hide** (hide her from the screen; the button then says **Show** to bring her back).
 
 ## 6. Samsung battery settings (important)
 
