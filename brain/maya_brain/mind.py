@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from .clock import Clock
 from .config import Config
 from .emotion import Emotion
-from .initiative import Initiative
+from .initiative import USER_ACTIVITY, Initiative
 from .llm import LLM, LLMError
 from .memory import Memory
 from .persona import Persona
@@ -114,7 +114,8 @@ class Mind:
 
     async def handle(self, event: Event) -> None:
         async with self._lock:
-            self._last_event = self.clock.now()
+            if isinstance(event, USER_ACTIVITY):
+                self._last_event = self.clock.now()
             self.initiative.on_event(event)
             if isinstance(event, UserMessage):
                 await self._on_message(event)

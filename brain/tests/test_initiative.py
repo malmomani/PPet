@@ -6,7 +6,7 @@ import pytest
 from maya_brain.config import InitiativeConfig
 from maya_brain.db import open_db
 from maya_brain.initiative import Initiative, in_window
-from maya_brain.protocol import AppClosed, AppOpened, Charging, Screen, UserTap
+from maya_brain.protocol import AppClosed, AppOpened, Charging, Hello, OfflineSummary, Screen, UserTap
 
 
 def test_quiet_window_wraps_midnight():
@@ -140,3 +140,28 @@ def test_engaged_resets_urge_and_cooldown_without_counting(ini, clock):
     clock.advance(timedelta(minutes=10))
     assert ini.should_fire()
     assert ini._day_count == 0
+
+HELLO = Hello(client_version="1", screen_w=1, screen_h=1)
+
+
+def test_hello_and_device_events_do_not_reset_return_clock(ini, clock):
+    ini.on_event(Screen(on=True))
+    clock.advance(timedelta(hours=4))
+    ini.on_event(HELLO)
+    ini.on_event(Charging(on=True))  # +3
+    ini.on_event(OfflineSummary(since=clock.now(), events=[]))
+    ini.on_event(Screen(on=True))
+    assert ini.urge == pytest.approx(33) and "came back" in ini.last_reason
+
+
+def test_app_opened_after_absence_keeps_return_reason(ini, clock):
+    ini.on_event(Screen(on=True))
+    clock.advance(timedelta(hours=4))
+    ini.on_event(AppOpened(package="t", label="TikTok"))
+    assert ini.urge == pytest.approx(35) and "came back after 4 hours" in ini.last_reason
+
+
+def test_hello_clears_current_app(ini):
+    ini.on_event(AppOpened(package="t", label="TikTok"))
+    ini.on_event(HELLO)
+    assert ini.current_app() is None

@@ -237,3 +237,10 @@ async def test_canned_reply_also_counts_as_engaged(mind, sent):
     mind.initiative._set_urge(100)
     await mind.handle(UserTap())
     assert mind.initiative.urge == 0
+
+
+async def test_only_user_activity_counts_as_last_event(mind, clock):
+    await mind.handle(Hello(client_version="1", screen_w=1, screen_h=1))
+    assert mind._last_event is None
+    await mind.handle(AppOpened(package="t", label="TikTok"))
+    assert mind._last_event == clock.now()

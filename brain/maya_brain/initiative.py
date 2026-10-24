@@ -6,7 +6,17 @@ from datetime import datetime, time, timedelta
 from .clock import Clock
 from .config import InitiativeConfig
 from .db import get_state, set_state
-from .protocol import AppClosed, AppOpened, Charging, Screen, UserMessage, UserTap
+from .protocol import (
+    AppClosed,
+    AppOpened,
+    Charging,
+    Hello,
+    Screen,
+    UserDrag,
+    UserMessage,
+    UserShush,
+    UserTap,
+)
 
 STATE_KEY = "initiative"
 
@@ -23,6 +33,9 @@ CHARGING_BUMP = 3.0
 RETURN_BUMP = 30.0
 LATE_NIGHT_BUMP = 10.0
 LONG_SESSION_BUMP = 15.0
+
+# Events that mean the user is actually around. Hello, Charging and OfflineSummary are not.
+USER_ACTIVITY = (AppOpened, AppClosed, Screen, UserMessage, UserTap, UserDrag, UserShush)
 
 
 def _parse_hhmm(s: str) -> time:
@@ -117,6 +130,7 @@ class Initiative:
     def on_event(self, event: object) -> None:
         now = self.clock.now()
         previous = _dt(self._last_activity)
+        bumps: list[tuple[float, str | None]] = []
 
         opened = isinstance(event, AppOpened)
         screen_on = isinstance(event, Screen) and event.on
@@ -124,12 +138,12 @@ class Initiative:
 
         if wake and previous is not None and now - previous > AWAY_AFTER:
             hours = int((now - previous).total_seconds() // 3600)
-            self._bump(RETURN_BUMP, f"User came back after {hours} hours")
+            bumps.append((RETURN_BUMP, f"User came back after {hours} hours"))
 
         if isinstance(event, AppOpened):
             self._app = {"package": event.package, "label": event.label, "start": now.isoformat()}
             self._session_bumped = False
-            self._bump(APP_SWITCH_BUMP, f"User switched to {event.label}")
+            bumps.append((APP_SWITCH_BUMP, f"User switched to {event.label}"))
         elif isinstance(event, AppClosed):
             if self._app is not None and self._app["package"] == event.package:
                 self._app = None
@@ -138,8 +152,11 @@ class Initiative:
             self._app = None
             self._session_bumped = False
             self._late_pending = False  # nobody is looking any more
+        elif isinstance(event, Hello):
+            self._app = None  # the phone (re)connected: whatever app we tracked is stale
+            self._session_bumped = False
         elif isinstance(event, Charging) and event.on:
-            self._bump(CHARGING_BUMP)
+            bumps.append((CHARGING_BUMP, None))
 
         if not in_window(now.time(), LATE_NIGHT_START, LATE_NIGHT_END):
             self._late_pending = False  # a stale trigger from an earlier night must not linger
@@ -148,12 +165,21 @@ class Initiative:
             hour_key = now.strftime("%Y-%m-%d %H")
             if self._late_hour != hour_key:
                 self._late_hour = hour_key
-                self._bump(
-                    LATE_NIGHT_BUMP,
-                    f"It's {now.strftime('%H:%M')} at night and the user is still on their phone",
+                bumps.append(
+                    (
+                        LATE_NIGHT_BUMP,
+                        f"It's {now.strftime('%H:%M')} at night and the user is still on their phone",
+                    )
                 )
 
-        self._last_activity = now.isoformat()
+        for amount, _ in bumps:
+            self._urge += amount
+        reasoned = [b for b in bumps if b[1] is not None]
+        if reasoned:
+            self._last_reason = max(reasoned, key=lambda b: b[0])[1]  # the biggest bump explains the urge
+
+        if isinstance(event, USER_ACTIVITY):
+            self._last_activity = now.isoformat()
         self._save()
 
     def tick(self, tier: str, mood: str) -> None:
