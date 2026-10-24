@@ -185,8 +185,8 @@ class Mind:
     async def _think(self, ctx: Context) -> Thought | None:
         try:
             return await self.thinker.think(ctx)
-        except LLMError:
-            log.warning("thinking failed for trigger %s", ctx.trigger, exc_info=True)
+        except LLMError as e:
+            log.warning("thinking failed for trigger %s: %s", ctx.trigger, e)
             return None
 
     async def _respond(self, ctx: Context) -> None:

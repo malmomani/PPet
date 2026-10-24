@@ -53,10 +53,10 @@ class OllamaLLM:
         self.cfg = cfg
         self._transport = transport
 
-    async def _post(self, path: str, payload: dict) -> dict:
+    async def _post(self, path: str, payload: dict, timeout_s: float | None = None) -> dict:
         try:
             async with httpx.AsyncClient(
-                base_url=self.cfg.base_url, timeout=self.cfg.timeout_s, transport=self._transport
+                base_url=self.cfg.base_url, timeout=timeout_s or self.cfg.timeout_s, transport=self._transport
             ) as client:
                 resp = await client.post(path, json=payload)
                 resp.raise_for_status()
@@ -73,6 +73,7 @@ class OllamaLLM:
             "messages": messages,
             "stream": False,
             "options": {"temperature": self.cfg.temperature, "num_ctx": self.cfg.num_ctx},
+            "keep_alive": self.cfg.keep_alive,
         }
         if json_mode:
             payload["format"] = "json"
@@ -88,12 +89,23 @@ class OllamaLLM:
         return _strip_think(content)
 
     async def embed(self, text: str) -> list[float]:
-        data = await self._post("/api/embed", {"model": self.cfg.embed_model, "input": text})
+        data = await self._post(
+            "/api/embed", {"model": self.cfg.embed_model, "input": text, "keep_alive": self.cfg.keep_alive}
+        )
         try:
             vec = data["embeddings"][0]
             return [float(x) for x in vec]
         except (KeyError, IndexError, TypeError, ValueError) as e:
             raise LLMError("/api/embed returned unexpected shape") from e
+
+    async def warm_up(self) -> None:
+        """Load both models into memory so the first real message isn't stuck behind a cold load."""
+        timeout = self.cfg.warmup_timeout_s
+        chat = {"model": self.cfg.chat_model, "messages": [], "keep_alive": self.cfg.keep_alive,
+                "options": {"num_ctx": self.cfg.num_ctx}}
+        await self._post("/api/chat", chat, timeout)
+        embed = {"model": self.cfg.embed_model, "input": "hello", "keep_alive": self.cfg.keep_alive}
+        await self._post("/api/embed", embed, timeout)
 
 
 class FakeLLM:

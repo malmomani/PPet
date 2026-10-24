@@ -93,12 +93,12 @@ async def test_time_sets_clock(mind, clock):
     assert (clock.now().hour, clock.now().minute) == (2, 0)
 
 
-async def test_actions_rendered_and_typing_hidden(mind, clock):
+async def test_actions_rendered_and_thinking_shown(mind, clock):
     out = await run_lines(mind, clock, "hi", "/quit")
     assert "Maya: hehe" in out
     assert "*happy*" in out
     assert "[state mood=" in out and "tier=" in out
-    assert "typing" not in out.lower()
+    assert out.count("(Maya is thinking…)") == 1  # shown once when typing starts, not when it stops
 
 
 async def test_show_commands(mind, clock):

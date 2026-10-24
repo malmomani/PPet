@@ -19,8 +19,12 @@ base_url = "http://localhost:11434"
 chat_model = "qwen3:8b"
 # Model used for embeddings (memory search).
 embed_model = "nomic-embed-text"
-# Per-request timeout in seconds.
-timeout_s = 30.0
+# Per-request timeout in seconds (generous: a cold model load can take a while).
+timeout_s = 120.0
+# How long Ollama keeps the models loaded after the last request ("30m", "2h", "-1" = forever).
+keep_alive = "30m"
+# Timeout for loading the models at startup, in seconds.
+warmup_timeout_s = 300.0
 # Thinking mode for models that support it (true or false).
 think = false
 # Sampling temperature for chat.

@@ -16,7 +16,7 @@ from pathlib import Path
 from .clock import FakeClock
 from .config import load_config
 from .db import open_db
-from .llm import FakeLLM, OllamaLLM
+from .llm import FakeLLM, LLMError, OllamaLLM
 from .mind import Mind
 from .protocol import (
     Action,
@@ -29,6 +29,7 @@ from .protocol import (
     Say,
     Screen,
     State,
+    Typing,
     UserDrag,
     UserMessage,
     UserShush,
@@ -139,7 +140,9 @@ def _render(action: Action) -> str | None:
         return f"[state mood={action.mood} tier={action.closeness_tier}]"
     if isinstance(action, Error):
         return f"[error {action.code}: {action.message}]"
-    return None  # Typing is not shown
+    if isinstance(action, Typing) and action.on:
+        return "(Maya is thinking…)"
+    return None
 
 
 def _lines_or_none(lines: list[str]) -> list[str]:
@@ -256,6 +259,14 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = load_config(Path(args.config))
     llm = FakeLLM() if args.fake_llm else OllamaLLM(cfg.llm)
+    if isinstance(llm, OllamaLLM):
+        print("Waking Maya up (loading the model; the first time can take a minute)...")
+        try:
+            asyncio.run(llm.warm_up())
+        except LLMError as e:
+            print(f"Can't reach Ollama at {cfg.llm.base_url}: {e}", file=sys.stderr)
+            print("Is Ollama running, and are the models pulled? Try: ollama list", file=sys.stderr)
+            return 1
     db = open_db(args.db)
     clock = FakeClock(start_time(db, datetime.now().astimezone()))
     mind = Mind(cfg, llm, db, clock)

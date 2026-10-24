@@ -1,6 +1,7 @@
 """Run the Maya brain server: python -m maya_brain [--config PATH]."""
 
 import argparse
+import asyncio
 import logging
 import re
 import socket
@@ -13,7 +14,7 @@ from .clock import SystemClock
 from .config import load_config
 from .db import open_db
 from .gateway import create_app
-from .llm import OllamaLLM
+from .llm import LLMError, OllamaLLM
 from .mind import Mind
 
 
@@ -64,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         handler.addFilter(REDACT_TOKENS)  # covers uvicorn's records too: they propagate to root
 
     llm = OllamaLLM(cfg.llm)
+    print("Loading Maya's models (the first time can take a minute)...")
+    try:
+        asyncio.run(llm.warm_up())
+    except LLMError as e:
+        print(f"Warning: can't reach Ollama at {cfg.llm.base_url} yet ({e}); starting anyway.", file=sys.stderr)
     db = open_db(cfg.db_path)
     mind = Mind(cfg, llm, db, SystemClock())
     app = create_app(cfg, mind)

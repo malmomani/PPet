@@ -21,7 +21,9 @@ class LLMConfig:
     base_url: str = "http://localhost:11434"
     chat_model: str = "qwen3:8b"
     embed_model: str = "nomic-embed-text"
-    timeout_s: float = 30.0
+    timeout_s: float = 120.0
+    keep_alive: str = "30m"
+    warmup_timeout_s: float = 300.0
     think: bool | None = False
     temperature: float = 0.8
     num_ctx: int = 8192

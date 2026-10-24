@@ -107,3 +107,40 @@ async def test_chat_sends_num_ctx():
     assert seen["options"]["num_ctx"] == 8192
     await OllamaLLM(LLMConfig(num_ctx=4096), transport=httpx.MockTransport(handler)).chat([])
     assert seen["options"]["num_ctx"] == 4096
+
+
+async def test_keep_alive_sent_and_timeout_default():
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        if req.url.path == "/api/embed":
+            return httpx.Response(200, json={"embeddings": [[0.1]]})
+        return httpx.Response(200, json={"message": {"content": "hi"}})
+
+    llm = OllamaLLM(LLMConfig(), transport=httpx.MockTransport(handler))
+    await llm.chat([])
+    await llm.embed("x")
+    assert [p["keep_alive"] for p in seen] == ["30m", "30m"]
+    assert LLMConfig().timeout_s == 120.0
+
+
+async def test_warm_up_loads_both_models():
+    paths = []
+
+    def handler(req):
+        paths.append((req.url.path, json.loads(req.content)["model"]))
+        if req.url.path == "/api/embed":
+            return httpx.Response(200, json={"embeddings": [[0.1]]})
+        return httpx.Response(200, json={"message": {"content": ""}})
+
+    await OllamaLLM(LLMConfig(), transport=httpx.MockTransport(handler)).warm_up()
+    assert paths == [("/api/chat", "qwen3:8b"), ("/api/embed", "nomic-embed-text")]
+
+
+async def test_warm_up_raises_when_ollama_down():
+    def boom(req):
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(LLMError):
+        await OllamaLLM(LLMConfig(), transport=httpx.MockTransport(boom)).warm_up()
