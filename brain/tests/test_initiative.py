@@ -82,3 +82,21 @@ def test_late_night_bump_once_per_hour(ini, clock):
     assert ini.urge == pytest.approx(10) and "at night" in ini.last_reason and "01:05" in ini.last_reason
     clock.advance(timedelta(hours=1)); ini.on_event(Screen(on=True))
     assert ini.urge == pytest.approx(20)
+
+
+def test_stale_late_night_pending_does_not_bypass_quiet_hours(ini, clock):
+    clock.set(clock.now().replace(hour=4, minute=50) + timedelta(days=1))
+    ini.on_event(Screen(on=True))
+    clock.set(clock.now().replace(hour=7, minute=30))
+    ini._set_urge(60)
+    assert not ini.should_fire()
+
+
+def test_late_night_pending_cleared_by_later_event_outside_window(ini, clock):
+    clock.set(clock.now().replace(hour=4, minute=50) + timedelta(days=1))
+    ini.on_event(Screen(on=True))
+    clock.set(clock.now().replace(hour=12, minute=0))
+    ini.on_event(UserTap())
+    clock.set(clock.now().replace(hour=2, minute=0) + timedelta(days=1))
+    ini._set_urge(60)
+    assert not ini.should_fire()

@@ -140,7 +140,9 @@ class Initiative:
         elif isinstance(event, Charging) and event.on:
             self._bump(CHARGING_BUMP)
 
-        if (opened or screen_on) and in_window(now.time(), LATE_NIGHT_START, LATE_NIGHT_END):
+        if not in_window(now.time(), LATE_NIGHT_START, LATE_NIGHT_END):
+            self._late_pending = False  # a stale trigger from an earlier night must not linger
+        elif opened or screen_on:
             self._late_pending = True
             hour_key = now.strftime("%Y-%m-%d %H")
             if self._late_hour != hour_key:
@@ -189,7 +191,7 @@ class Initiative:
         if self._day == today and self._day_count >= self.cfg.daily_cap:
             return False
         if self._in_quiet(now):
-            if not self._late_pending:
+            if not (self._late_pending and in_window(now.time(), LATE_NIGHT_START, LATE_NIGHT_END)):
                 return False
             night_count = self._night_count if self._night == self._tonight(now) else 0
             if night_count >= self.cfg.late_night_max:
