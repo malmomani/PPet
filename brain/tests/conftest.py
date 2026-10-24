@@ -15,3 +15,12 @@ def llm():
     from maya_brain.llm import FakeLLM
 
     return FakeLLM()
+
+
+@pytest.fixture
+def db():
+    from maya_brain.db import open_db
+
+    conn = open_db(":memory:")
+    yield conn
+    conn.close()
