@@ -86,6 +86,10 @@ It prints the `ws://<ip>:8765/ws` addresses the phone can use, and serves `/heal
 - Allow inbound TCP 8765 in your firewall for the private network only (on Windows, a Defender Firewall inbound rule set to the Private profile).
 - To reach your PC away from home, install Tailscale on the PC and phone and use the PC's Tailscale address (or set `host` to that address in `maya.toml`).
 
+## Phone app
+
+The Android app that shows Maya on your phone has its own install and pairing guide: see [`../android/README.md`](../android/README.md).
+
 ## Privacy
 
 Everything stays on your machine. Conversations, memories, facts, traits and the diary are stored in the SQLite file `maya.db` (the simulator uses `maya-sim.db`), and the language model runs locally through Ollama. Nothing is sent to a cloud service. Delete the file to make Maya forget everything.
