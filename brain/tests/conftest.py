@@ -24,3 +24,11 @@ def db():
     conn = open_db(":memory:")
     yield conn
     conn.close()
+
+
+@pytest.fixture
+def persona(db, clock):
+    from maya_brain.config import PersonaConfig
+    from maya_brain.persona import Persona
+
+    return Persona(db, PersonaConfig(), clock)
