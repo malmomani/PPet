@@ -1,0 +1,129 @@
+from datetime import datetime, timedelta
+
+from maya_brain.protocol import (
+    AppClosed,
+    AppOpened,
+    Charging,
+    Screen,
+    UserDrag,
+    UserMessage,
+    UserShush,
+    UserTap,
+)
+from maya_brain.sim import main, parse_command, run_sim
+
+NOW = datetime(2026, 10, 24, 14, 0).astimezone()
+
+
+def test_parse_commands():
+    assert parse_command("hello there", NOW)[1].text == "hello there"
+    assert parse_command("/app TikTok", NOW)[1].label == "TikTok"
+    assert parse_command("/skip 3h", NOW) == ("skip", timedelta(hours=3))
+    assert parse_command("/skip 90m", NOW) == ("skip", timedelta(minutes=90))
+    assert parse_command("/time 02:00", NOW)[1].hour == 2
+    assert parse_command("/screen off", NOW)[1].on is False
+    assert parse_command("/mood", NOW) == ("show", "mood")
+    assert parse_command("/wat", NOW) == ("help", None)
+
+
+def test_parse_command_details():
+    kind, ev = parse_command("hello there", NOW)
+    assert kind == "event" and isinstance(ev, UserMessage)
+    kind, ev = parse_command("/app TikTok", NOW)
+    assert isinstance(ev, AppOpened) and ev.package == "tiktok"
+    assert isinstance(parse_command("/tap", NOW)[1], UserTap)
+    assert parse_command("/throw", NOW)[1].thrown is True and isinstance(parse_command("/throw", NOW)[1], UserDrag)
+    assert isinstance(parse_command("/shush", NOW)[1], UserShush)
+    assert parse_command("/close", NOW) == ("close", None)
+    assert isinstance(parse_command("/screen on", NOW)[1], Screen)
+    assert parse_command("/charge on", NOW)[1].on is True
+    assert isinstance(parse_command("/charge off", NOW)[1], Charging)
+    assert parse_command("/skip 2d", NOW) == ("skip", timedelta(days=2))
+    when = parse_command("/time 02:30", NOW)[1]
+    assert (when.date(), when.hour, when.minute) == (NOW.date(), 2, 30) and when.tzinfo is not None
+    for name in ("thoughts", "facts", "traits", "diary", "status"):
+        assert parse_command(f"/{name}", NOW) == ("show", name)
+    assert parse_command("/reflect", NOW) == ("reflect", None)
+    assert parse_command("/quit", NOW) == ("quit", None)
+    assert parse_command("/help", NOW) == ("help", None)
+
+
+def test_parse_invalid_arguments_give_help():
+    for line in ("/time 25:99", "/time", "/time abc", "/skip", "/skip 3x", "/skip -1h", "/screen maybe",
+                 "/charge", "/app", "/app   "):
+        assert parse_command(line, NOW) == ("help", None), line
+
+
+async def test_scripted_session(mind, clock):
+    lines = iter(["hi Maya", "/app TikTok", "/skip 1h", "/close", "/thoughts", "/quit"])
+    out = []
+    await run_sim(mind, clock, lambda: next(lines), out.append)
+    text = "\n".join(out)
+    assert "Maya: hehe" in text
+    assert mind.initiative.current_app() is None
+
+
+async def run_lines(mind, clock, *lines):
+    it = iter(lines)
+    out = []
+    await run_sim(mind, clock, lambda: next(it), out.append)  # StopIteration is not EOFError: end with /quit
+    return "\n".join(out)
+
+
+async def test_close_sends_elapsed_and_clears_app(mind, clock):
+    out = await run_lines(mind, clock, "/app TikTok", "/skip 10m", "/close", "/quit")
+    assert mind.initiative.current_app() is None
+    assert "skipped 10m" in out
+    turns = [t.content for t in mind.memory.recent_turns()]
+    assert any("TikTok for 10 min" in c for c in turns)
+
+
+async def test_close_without_app_and_skip_advances_clock(mind, clock):
+    start = clock.now()
+    out = await run_lines(mind, clock, "/close", "/skip 3h", "/quit")
+    assert "no app" in out.lower()
+    assert clock.now() == start + timedelta(hours=3)
+    assert "[skipped 3h" in out
+
+
+async def test_time_sets_clock(mind, clock):
+    await run_lines(mind, clock, "/time 02:00", "/quit")
+    assert (clock.now().hour, clock.now().minute) == (2, 0)
+
+
+async def test_actions_rendered_and_typing_hidden(mind, clock):
+    out = await run_lines(mind, clock, "hi", "/quit")
+    assert "Maya: hehe" in out
+    assert "*happy*" in out
+    assert "[state mood=" in out and "tier=" in out
+    assert "typing" not in out.lower()
+
+
+async def test_show_commands(mind, clock):
+    out = await run_lines(mind, clock, "hi", "/status", "/mood", "/facts", "/traits", "/diary", "/thoughts", "/quit")
+    assert "closeness" in out
+    assert out.count("(none)") >= 3
+    assert "hehe" in out
+
+
+async def test_reflect_and_help_and_eof(mind, clock):
+    def read():
+        if not lines:
+            raise EOFError
+        return lines.pop(0)
+
+    lines = ["/reflect", "/wat", ""]
+    out = []
+    await run_sim(mind, clock, read, out.append)
+    text = "\n".join(out)
+    assert "/skip" in text  # help text listed
+    assert "reflect" in text.lower()
+
+
+def test_main_fake_llm_scripted(tmp_path, monkeypatch, capsys):
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("hi\n/app TikTok\n/skip 2h\n/quit\n"))
+    code = main(["--fake-llm", "--db", str(tmp_path / "sim.db"), "--config", str(tmp_path / "none.toml")])
+    assert code == 0
+    assert "Maya: hehe" in capsys.readouterr().out
