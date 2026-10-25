@@ -4,6 +4,7 @@ import java.time.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -144,5 +145,74 @@ class ProtocolTest {
         val n = Json.parseToJsonElement(Protocol.encode(Notification("com.g", "Gmail", "Bob", kind = "email"))).jsonObject
         assertEquals(JsonNull, n["group"])
         assertEquals("email", n["kind"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun encode_glance_body_moment() {
+        val ts = Instant.parse("2026-10-25T09:00:00Z")
+        val g = Json.parseToJsonElement(
+            Protocol.encode(Glance("com.wa", "WhatsApp", listOf("Hi", "there"), listOf("send", "like"), id = "g1", ts = ts)),
+        ).jsonObject
+        assertEquals(setOf("type", "id", "ts", "package", "app", "lines", "targets"), g.keys)
+        assertEquals("glance", g["type"]!!.jsonPrimitive.content)
+        assertEquals("g1", g["id"]!!.jsonPrimitive.content)
+        assertEquals("2026-10-25T09:00:00Z", g["ts"]!!.jsonPrimitive.content)
+        assertEquals("com.wa", g["package"]!!.jsonPrimitive.content)
+        assertEquals("WhatsApp", g["app"]!!.jsonPrimitive.content)
+        assertEquals(listOf("Hi", "there"), g["lines"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("send", "like"), g["targets"]!!.jsonArray.map { it.jsonPrimitive.content })
+
+        val b = Json.parseToJsonElement(
+            Protocol.encode(Body("perch", "platform", null, 0.456, 1.0, id = "b1", ts = ts)),
+        ).jsonObject
+        assertEquals(setOf("type", "id", "ts", "doing", "where", "target", "x", "y"), b.keys)
+        assertEquals("body", b["type"]!!.jsonPrimitive.content)
+        assertEquals("perch", b["doing"]!!.jsonPrimitive.content)
+        assertEquals("platform", b["where"]!!.jsonPrimitive.content)
+        assertEquals(JsonNull, b["target"])
+        assertEquals(0.46, b["x"]!!.jsonPrimitive.double, 0.0)
+        assertEquals(1.0, b["y"]!!.jsonPrimitive.double, 0.0)
+
+        val t = Json.parseToJsonElement(
+            Protocol.encode(Body("tease", "target", "send", 0.5, 0.25)),
+        ).jsonObject
+        assertEquals("send", t["target"]!!.jsonPrimitive.content)
+
+        val m = Json.parseToJsonElement(
+            Protocol.encode(BodyMoment("shooed", "like", id = "m1", ts = ts)),
+        ).jsonObject
+        assertEquals(setOf("type", "id", "ts", "kind", "target"), m.keys)
+        assertEquals("body_moment", m["type"]!!.jsonPrimitive.content)
+        assertEquals("shooed", m["kind"]!!.jsonPrimitive.content)
+        assertEquals("like", m["target"]!!.jsonPrimitive.content)
+        val f = Json.parseToJsonElement(Protocol.encode(BodyMoment("fell", null))).jsonObject
+        assertEquals(JsonNull, f["target"])
+    }
+
+    @Test fun decode_move() {
+        assertEquals(
+            Move("sit_on", "send"),
+            Protocol.decodeAction("""{"type":"move","intent":"sit_on","target":"send","id":"1","ts":"2026-10-25T09:00:00Z"}"""),
+        )
+        assertEquals(Move("poke", "follow"), Protocol.decodeAction("""{"type":"move","intent":"poke","target":"follow"}"""))
+        assertEquals(Move("go_left", null), Protocol.decodeAction("""{"type":"move","intent":"go_left","target":null}"""))
+        assertEquals(Move("wander", null), Protocol.decodeAction("""{"type":"move","intent":"wander"}"""))
+        // every non-tease intent decodes
+        for (i in MOVE_INTENTS - TEASE_INTENTS) {
+            assertEquals(Move(i, null), Protocol.decodeAction("""{"type":"move","intent":"$i"}"""))
+        }
+        // a target that is not a tease tag becomes null (fine for a plain move, fatal for a tease)
+        assertEquals(Move("sit", null), Protocol.decodeAction("""{"type":"move","intent":"sit","target":"banana"}"""))
+        assertNull(Protocol.decodeAction("""{"type":"move","intent":"sit_on","target":"banana"}"""))
+        // sit_on / poke need a target
+        assertNull(Protocol.decodeAction("""{"type":"move","intent":"sit_on"}"""))
+        assertNull(Protocol.decodeAction("""{"type":"move","intent":"poke","target":null}"""))
+        assertNull(Protocol.decodeAction("""{"type":"move","intent":"poke","target":5}"""))
+    }
+
+    @Test fun unknown_action_ignored() {
+        assertNull(Protocol.decodeAction("""{"type":"move","intent":"fly"}"""))
+        assertNull(Protocol.decodeAction("""{"type":"move","intent":"fly","target":"send"}"""))
+        assertNull(Protocol.decodeAction("""{"type":"move"}"""))
+        assertNull(Protocol.decodeAction("""{"type":"teleport","intent":"stay"}"""))
     }
 }

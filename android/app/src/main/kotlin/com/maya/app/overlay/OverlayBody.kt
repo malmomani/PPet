@@ -32,6 +32,7 @@ import com.maya.core.ErrorMsg
 import com.maya.core.Event
 import com.maya.core.Gesture
 import com.maya.core.HOLD_TO_TALK_MS
+import com.maya.core.Move
 import com.maya.core.Say
 import com.maya.core.State
 import com.maya.core.Typing
@@ -174,6 +175,7 @@ class OverlayBody(
             is State -> Unit // nothing visible in v1
             is Audio -> Unit // played by the service's VoicePlayer
             is ErrorMsg -> Unit // the service handles auth errors
+            is Move -> Unit // acted on once the body is 2-D
         }
     }
 

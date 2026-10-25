@@ -97,6 +97,38 @@ data class Notification(
     override val ts: Instant = Instant.now(),
 ) : Event
 
+/** The visible text of the app the user is in, plus which tease targets it shows. Never queued offline. */
+data class Glance(
+    val packageName: String,
+    val app: String,
+    val lines: List<String>,
+    val targets: List<String>,
+    override val id: String = newId(),
+    override val ts: Instant = Instant.now(),
+) : Event
+
+/**
+ * What her body is doing: [doing] idle|walk|sit|perch|jump|fall|nap|peek|tease|dragged, [where]
+ * floor|platform|target; [x]/[y] are her feet as fractions of the screen. Never queued offline.
+ */
+data class Body(
+    val doing: String,
+    val where: String,
+    val target: String?,
+    val x: Double,
+    val y: Double,
+    override val id: String = newId(),
+    override val ts: Instant = Instant.now(),
+) : Event
+
+/** Something happened to her body: [kind] is `fell` or `shooed`. Never queued offline. */
+data class BodyMoment(
+    val kind: String,
+    val target: String? = null,
+    override val id: String = newId(),
+    override val ts: Instant = Instant.now(),
+) : Event
+
 data class OfflineSummary(
     val events: List<Event>,
     val since: Instant,
@@ -120,6 +152,16 @@ data class Typing(val on: Boolean) : Action
 data class Audio(val refId: String, val mime: String, val dataB64: String) : Action
 
 data class ErrorMsg(val code: String, val message: String) : Action
+
+/** [intent] is one of [MOVE_INTENTS]; [target] is a tease tag, always set for [TEASE_INTENTS]. */
+data class Move(val intent: String, val target: String? = null) : Action
+
+/** Moves the brain can ask for (same as the brain). [TEASE_INTENTS] need a target. */
+val MOVE_INTENTS: List<String> = listOf(
+    "stay", "wander", "come_closer", "go_left", "go_right", "go_up", "go_down",
+    "sit", "nap", "peek", "sit_on", "poke",
+)
+val TEASE_INTENTS: List<String> = listOf("sit_on", "poke")
 
 object Protocol {
     private fun fmt(t: Instant): String = DateTimeFormatter.ISO_INSTANT.format(t)
@@ -162,6 +204,23 @@ object Protocol {
                 put("group", e.group)
                 put("kind", e.kind)
             }
+            is Glance -> {
+                put("package", e.packageName)
+                put("app", e.app)
+                put("lines", JsonArray(e.lines.map { JsonPrimitive(it) }))
+                put("targets", JsonArray(e.targets.map { JsonPrimitive(it) }))
+            }
+            is Body -> {
+                put("doing", e.doing)
+                put("where", e.where)
+                put("target", e.target)
+                put("x", unit(e.x))
+                put("y", unit(e.y))
+            }
+            is BodyMoment -> {
+                put("kind", e.kind)
+                put("target", e.target)
+            }
             is OfflineSummary -> {
                 put("events", JsonArray(e.events.map { encodeObject(it) }))
                 put("since", fmt(e.since))
@@ -180,8 +239,14 @@ object Protocol {
         is Screen -> "screen"
         is Charging -> "charging"
         is Notification -> "notification"
+        is Glance -> "glance"
+        is Body -> "body"
+        is BodyMoment -> "body_moment"
         is OfflineSummary -> "offline_summary"
     }
+
+    /** A fraction of the screen: clamped to 0..1 and rounded to 2 decimals. */
+    private fun unit(v: Double): Double = Math.round(v.coerceIn(0.0, 1.0) * 100) / 100.0
 
     /** Returns null for unknown types, malformed JSON, or missing/invalid required fields. */
     fun decodeAction(text: String): Action? = try {
@@ -210,6 +275,12 @@ object Protocol {
                 o.str("data_b64") ?: return null,
             )
             "error" -> ErrorMsg(o.str("code") ?: return null, o.str("message") ?: return null)
+            "move" -> {
+                val intent = o.str("intent")?.takeIf { it in MOVE_INTENTS } ?: return null
+                val target = o.str("target")?.takeIf { it in TEASE_TAGS }
+                if (intent in TEASE_INTENTS && target == null) return null
+                Move(intent, target)
+            }
             else -> null
         }
     }
