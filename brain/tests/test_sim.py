@@ -184,3 +184,94 @@ def test_start_time_is_after_newest_turn(db):
     future = real_now + timedelta(days=3)
     Memory(db, FakeLLM(), FakeClock(future)).add_turn("user", "from a sim session that skipped ahead")
     assert start_time(db, real_now) == future
+
+
+def test_parse_say_voice_command():
+    assert parse_command("/say-voice hello", NOW) == ("say_voice", "hello")
+    assert parse_command("/say-voice hello there  ", NOW) == ("say_voice", "hello there")
+    assert parse_command("/say-voice", NOW) == ("help", None)
+
+
+def test_parse_voice_flag_marks_typed_lines():
+    assert parse_command("hi", NOW)[1].voice is False
+    assert parse_command("hi", NOW, voice=True)[1].voice is True
+    assert parse_command("/tap", NOW, voice=True)[0] == "event"
+
+
+def test_sim_voice_flag_writes_wav(tmp_path, monkeypatch, capsys):
+    import io
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("hi\n/quit\n"))
+    code = main(["--fake-llm", "--voice", "--db", str(tmp_path / "sim.db"), "--config", str(tmp_path / "none.toml")])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "[audio" in out and "KB]" in out
+    wav = tmp_path / "maya-voice-last.wav"
+    assert wav.is_file() and wav.read_bytes()[:4] == b"RIFF"
+
+
+def test_sim_without_voice_flag_writes_nothing(tmp_path, monkeypatch, capsys):
+    import io
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("hi\n/say-voice hello\n/quit\n"))
+    assert main(["--fake-llm", "--db", str(tmp_path / "sim.db"), "--config", str(tmp_path / "none.toml")]) == 0
+    out = capsys.readouterr().out
+    assert "[audio" not in out and "(voice unavailable)" in out
+    assert not (tmp_path / "maya-voice-last.wav").exists()
+
+
+async def test_say_voice_synthesizes_and_plays(mind, clock, tmp_path):
+    from maya_brain.tts import FakeTTS
+
+    mind.tts = FakeTTS()
+    played = []
+    wav = tmp_path / "last.wav"
+    it = iter(["/say-voice hello 😊 there", "/quit"])
+    out = []
+    await run_sim(mind, clock, lambda: next(it), out.append, voice=True, wav_path=wav, play=played.append)
+    assert mind.tts.calls == ["hello 😊 there"]
+    assert wav.read_bytes()[:4] == b"RIFF" and played == [wav]
+    assert any(line.startswith("[audio") for line in out)
+
+
+async def test_say_voice_failure_is_reported(mind, clock, tmp_path):
+    from maya_brain.tts import FakeTTS
+
+    mind.tts = FakeTTS()
+    mind.tts.fail_next = 1
+    it = iter(["/say-voice hello", "/mood", "/quit"])
+    out = []
+    await run_sim(mind, clock, lambda: next(it), out.append, voice=True, wav_path=tmp_path / "l.wav", play=lambda p: None)
+    assert any("voice error" in line for line in out) and any("mood=" in line for line in out)
+
+
+async def test_voice_session_sends_hello_and_voices_replies(mind, clock, tmp_path):
+    from maya_brain.tts import FakeTTS
+
+    mind.tts = FakeTTS()
+    played = []
+    it = iter(["hi", "/quit"])
+    out = []
+    await run_sim(mind, clock, lambda: next(it), out.append, voice=True, wav_path=tmp_path / "l.wav", play=played.append)
+    assert mind.voice_mode == "replies"
+    assert played == [tmp_path / "l.wav"] and mind.tts.calls == ["hehe"]
+    assert out.index("Maya: hehe") < next(i for i, line in enumerate(out) if line.startswith("[audio"))
+
+
+def test_sim_voice_warns_once_when_kokoro_missing(tmp_path, monkeypatch, capsys):
+    import io
+
+    from maya_brain.llm import OllamaLLM
+
+    async def no_warm_up(self):
+        return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(OllamaLLM, "warm_up", no_warm_up)
+    monkeypatch.setattr("sys.stdin", io.StringIO("/quit\n"))
+    assert main(["--voice", "--db", str(tmp_path / "sim.db"), "--config", str(tmp_path / "none.toml")]) == 0
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert text.count('pip install -e ".[voice]"') == 1 and "python -m maya_brain.fetch_voice" in text

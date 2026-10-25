@@ -3,6 +3,7 @@
 import asyncio
 import io
 import re
+import sys
 import threading
 import unicodedata
 import wave
@@ -93,6 +94,24 @@ class KokoroTTS:
             raise
         except Exception as exc:
             raise TTSError(f"kokoro failed: {exc}") from exc
+
+
+NOT_READY_WARNING = (
+    "Warning: voice is enabled but Kokoro isn't ready ({why}), so Maya will stay text-only. "
+    'To enable it, run: pip install -e ".[voice]" and then: python -m maya_brain.fetch_voice '
+    "(a broken onnxruntime install also shows up as unavailable)."
+)
+
+
+def load_kokoro(cfg: VoiceConfig, base_dir: Path) -> "KokoroTTS | None":
+    """Kokoro if voice is enabled and usable; otherwise None, after one warning on stderr."""
+    if not cfg.enabled:
+        return None
+    tts = KokoroTTS(cfg, base_dir)
+    if tts.available():
+        return tts
+    print(NOT_READY_WARNING.format(why=f"looked for {tts.model_file} and {tts.voices_file}"), file=sys.stderr)
+    return None
 
 
 class FakeTTS:

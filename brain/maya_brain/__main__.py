@@ -16,6 +16,7 @@ from .db import open_db
 from .gateway import create_app
 from .llm import LLMError, OllamaLLM
 from .mind import Mind
+from .tts import load_kokoro
 
 
 MIN_TOKEN_LEN = 16
@@ -71,7 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     except LLMError as e:
         print(f"Warning: can't reach Ollama at {cfg.llm.base_url} yet ({e}); starting anyway.", file=sys.stderr)
     db = open_db(cfg.db_path)
-    mind = Mind(cfg, llm, db, SystemClock())
+    tts = load_kokoro(cfg.voice, base_dir=Path(args.config).resolve().parent)
+    mind = Mind(cfg, llm, db, SystemClock(), tts=tts)
     app = create_app(cfg, mind)
 
     for ip in _local_ipv4s():

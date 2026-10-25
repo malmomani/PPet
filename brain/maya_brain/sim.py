@@ -1,10 +1,11 @@
 """Terminal simulator: chat with Maya and inject fake phone events on a virtual clock.
 
-Run: python -m maya_brain.sim [--config PATH] [--fake-llm] [--db PATH]
+Run: python -m maya_brain.sim [--config PATH] [--fake-llm] [--db PATH] [--voice]
 """
 
 import argparse
 import asyncio
+import base64
 import json
 import re
 import sqlite3
@@ -23,9 +24,11 @@ from .protocol import (
     Animate,
     AppClosed,
     AppOpened,
+    Audio,
     Charging,
     Error,
     Event,
+    Hello,
     Say,
     Screen,
     State,
@@ -35,9 +38,11 @@ from .protocol import (
     UserShush,
     UserTap,
 )
+from .tts import TTS, FakeTTS, TTSError, load_kokoro
 
 PROMPT = "you> "
 MAX_TEXT = 2000
+VOICE_WAV = "maya-voice-last.wav"
 SHOW_NAMES = ("thoughts", "mood", "facts", "traits", "diary", "status")
 
 HELP = """Commands:
@@ -52,6 +57,7 @@ HELP = """Commands:
   /time HH:MM       jump the virtual clock forward to the next HH:MM (today or tomorrow)
   /skip <N>m|h|d    advance the virtual clock, up to 30d (e.g. /skip 90m, /skip 3h, /skip 2d)
   /reflect          run Maya's reflection now (facts, traits, diary)
+  /say-voice <text> speak text aloud with Maya's voice (needs --voice)
   /thoughts         Maya's last 5 private thoughts
   /mood             current mood, closeness and tier
   /facts            what Maya knows about you
@@ -68,11 +74,14 @@ _UNIT_MINUTES = {"m": 1, "h": 60, "d": 1440}
 MAX_SKIP = timedelta(days=30)
 
 
-def parse_command(line: str, now: datetime) -> tuple[str, object]:
-    """Turn one input line into a (kind, payload) pair for run_sim to dispatch."""
+def parse_command(line: str, now: datetime, voice: bool = False) -> tuple[str, object]:
+    """Turn one input line into a (kind, payload) pair for run_sim to dispatch.
+
+    With `voice`, typed lines count as spoken (like a hold-to-talk message on the phone).
+    """
     line = line.strip()
     if not line.startswith("/"):
-        return "event", UserMessage(text=line[:MAX_TEXT])
+        return "event", UserMessage(text=line[:MAX_TEXT], voice=voice)
     cmd, _, arg = line[1:].partition(" ")
     cmd, arg = cmd.lower(), arg.strip()
     help_ = ("help", None)
@@ -113,6 +122,8 @@ def parse_command(line: str, now: datetime) -> tuple[str, object]:
         return "show", cmd
     if cmd == "reflect":
         return "reflect", None
+    if cmd == "say-voice":
+        return ("say_voice", arg[:MAX_TEXT]) if arg else help_
     if cmd == "quit":
         return "quit", None
     return help_
@@ -143,6 +154,15 @@ def _render(action: Action) -> str | None:
     if isinstance(action, Typing) and action.on:
         return "(Maya is thinking…)"
     return None
+
+
+def _play_wav(path: Path) -> None:
+    """Play a WAV file on Windows (stdlib winsound); elsewhere the file is only saved."""
+    if sys.platform != "win32":
+        return
+    import winsound
+
+    winsound.PlaySound(str(path), winsound.SND_FILENAME)
 
 
 def _lines_or_none(lines: list[str]) -> list[str]:
@@ -178,15 +198,49 @@ async def run_sim(
     read: Callable[[], str],
     write: Callable[[str], None],
     tick_s: float | None = None,
+    *,
+    voice: bool = False,
+    wav_path: Path | None = None,
+    play: Callable[[Path], None] = _play_wav,
 ) -> None:
-    """Read-eval-print loop. Ends on /quit or EOFError from `read`."""
+    """Read-eval-print loop. Ends on /quit or EOFError from `read`.
+
+    With `voice`, typed lines are sent as spoken messages and Maya's `audio` actions are saved to
+    `wav_path` (default maya-voice-last.wav in the current directory) and played via `play`.
+    """
+    wav_path = wav_path if wav_path is not None else Path(VOICE_WAV)
+    fresh_audio = False
     step = timedelta(seconds=tick_s if tick_s is not None else mind.cfg.initiative.tick_s)
     app: tuple[str, str, datetime] | None = None  # (package, label, opened_at)
 
+    def keep_audio(wav: bytes) -> None:
+        nonlocal fresh_audio
+        try:
+            wav_path.write_bytes(wav)
+        except OSError as exc:
+            write(f"[error could not save {wav_path}: {exc}]")
+            return
+        write(f"[audio {max(1, round(len(wav) / 1024))} KB]")
+        fresh_audio = True
+
     async def sink(action: Action) -> None:
+        if isinstance(action, Audio):
+            keep_audio(base64.b64decode(action.data_b64))
+            return
         text = _render(action)
         if text is not None:
             write(text)
+
+    async def play_pending() -> None:
+        """Wait for Maya's voice (it is synthesized in the background), then play what arrived."""
+        nonlocal fresh_audio
+        await mind.wait_voice()
+        if fresh_audio:
+            fresh_audio = False
+            try:
+                play(wav_path)
+            except Exception as exc:  # no sound device etc.: the file is still saved
+                write(f"[error could not play audio: {type(exc).__name__}: {exc}]")
 
     mind.set_sink(sink)
 
@@ -196,6 +250,9 @@ async def run_sim(
         except Exception as exc:  # keep the REPL alive whatever the brain does
             write(f"[error {type(exc).__name__}: {exc}]")
 
+    if voice:
+        await guarded(mind.handle(Hello(client_version="sim", screen_w=1, screen_h=1, voice_mode="replies")))
+
     while True:
         try:
             line = read()
@@ -204,7 +261,7 @@ async def run_sim(
         if not line.strip():
             continue
         try:
-            kind, payload = parse_command(line, clock.now())
+            kind, payload = parse_command(line, clock.now(), voice)
 
             if kind == "quit":
                 return
@@ -238,6 +295,15 @@ async def run_sim(
                 write("[reflecting…]")
                 await guarded(mind.reflection.reflect())
                 write("[reflection done — see /facts /traits /diary]")
+            elif kind == "say_voice":
+                if mind.tts is None:
+                    write("(voice unavailable)")
+                else:
+                    try:
+                        keep_audio(await mind.tts.synth(payload))
+                    except TTSError as exc:
+                        write(f"[voice error: {exc}]")
+            await play_pending()
 
         except Exception as exc:  # one bad line must never kill the REPL
             write(f"[error {type(exc).__name__}: {exc}]")
@@ -254,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="maya_brain.sim", description="Chat with Maya in the terminal")
     parser.add_argument("--config", default="maya.toml", help="path to config TOML (default: maya.toml)")
     parser.add_argument("--fake-llm", action="store_true", help="use a canned fake LLM instead of Ollama")
+    parser.add_argument("--voice", action="store_true", help="speak Maya's replies (typed lines count as spoken)")
     parser.add_argument("--db", default="maya-sim.db", help="SQLite file for the simulator (default: maya-sim.db)")
     args = parser.parse_args(argv)
 
@@ -269,11 +336,19 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     db = open_db(args.db)
     clock = FakeClock(start_time(db, datetime.now().astimezone()))
-    mind = Mind(cfg, llm, db, clock)
+    tts: TTS | None = None
+    if args.voice:
+        if args.fake_llm:
+            tts = FakeTTS()
+        elif cfg.voice.enabled:
+            tts = load_kokoro(cfg.voice, base_dir=Path(args.config).resolve().parent)
+        else:
+            print("Voice is switched off in the config ([voice] enabled = false).", file=sys.stderr)
+    mind = Mind(cfg, llm, db, clock, tts=tts)
 
     print("Maya simulator. Type /help for commands, /quit to leave.")
     try:
-        asyncio.run(run_sim(mind, clock, lambda: input(PROMPT), print))
+        asyncio.run(run_sim(mind, clock, lambda: input(PROMPT), print, voice=args.voice))
     except KeyboardInterrupt:
         print()
     finally:

@@ -196,3 +196,90 @@ def test_gateway_logs_connect_without_query_string(client, caplog):
     messages = [r.getMessage() for r in caplog.records if r.name == "maya_brain.gateway"]
     assert any("connected" in m for m in messages)
     assert not any("token" in m for m in messages)
+
+
+def test_main_runs_without_kokoro(tmp_path, monkeypatch, capsys):
+    import maya_brain.__main__ as entry
+    from maya_brain.llm import OllamaLLM
+
+    async def no_warm_up(self):
+        return None
+
+    seen = {}
+    monkeypatch.setattr(OllamaLLM, "warm_up", no_warm_up)
+    monkeypatch.setattr(entry, "Mind", lambda *a, **kw: seen.update(kw) or object())
+    monkeypatch.setattr(entry, "create_app", lambda cfg, mind: object())
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: None)
+    cfg = tmp_path / "m.toml"
+    cfg.write_text(f'db_path = "{tmp_path / "m.db"}"\n[server]\ntoken = "a-long-enough-secret"\n[voice]\nenabled = true\n')
+    assert entry.main(["--config", str(cfg)]) == 0
+    captured = capsys.readouterr()
+    warning = captured.out + captured.err
+    assert warning.count('pip install -e ".[voice]"') == 1
+    assert "python -m maya_brain.fetch_voice" in warning
+    assert "onnxruntime" in warning
+    assert seen["tts"] is None
+
+
+def test_main_skips_voice_check_when_disabled(tmp_path, monkeypatch, capsys):
+    import maya_brain.__main__ as entry
+    from maya_brain.llm import OllamaLLM
+
+    async def no_warm_up(self):
+        return None
+
+    seen = {}
+    monkeypatch.setattr(OllamaLLM, "warm_up", no_warm_up)
+    monkeypatch.setattr(entry, "Mind", lambda *a, **kw: seen.update(kw) or object())
+    monkeypatch.setattr(entry, "create_app", lambda cfg, mind: object())
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: None)
+    cfg = tmp_path / "m.toml"
+    cfg.write_text(f'db_path = "{tmp_path / "m.db"}"\n[server]\ntoken = "a-long-enough-secret"\n[voice]\nenabled = false\n')
+    assert entry.main(["--config", str(cfg)]) == 0
+    captured = capsys.readouterr()
+    assert "fetch_voice" not in captured.out + captured.err
+    assert seen["tts"] is None
+
+
+def test_main_resolves_models_next_to_config(tmp_path, monkeypatch):
+    import maya_brain.__main__ as entry
+    from maya_brain.llm import OllamaLLM
+
+    async def no_warm_up(self):
+        return None
+
+    seen = {}
+    monkeypatch.setattr(OllamaLLM, "warm_up", no_warm_up)
+    monkeypatch.setattr(entry, "Mind", lambda *a, **kw: seen.update(kw) or object())
+    monkeypatch.setattr(entry, "create_app", lambda cfg, mind: object())
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: None)
+    monkeypatch.setattr(entry, "load_kokoro", lambda cfg, base_dir: seen.update(base_dir=base_dir))
+    cfg = tmp_path / "m.toml"
+    cfg.write_text(f'db_path = "{tmp_path / "m.db"}"\n[server]\ntoken = "a-long-enough-secret"\n')
+    assert entry.main(["--config", str(cfg)]) == 0
+    assert seen["base_dir"] == tmp_path.resolve()
+
+
+def test_audio_action_reaches_the_phone(clock):
+    from maya_brain.tts import FakeTTS
+
+    cfg = Config()
+    cfg.server.token = "t"
+    conn = open_db(":memory:")
+    mind = Mind(cfg, FakeLLM(), conn, clock, tts=FakeTTS())
+    app = create_app(cfg, mind)
+    try:
+        with TestClient(app) as c:
+            with c.websocket_connect("/ws?token=t") as ws:
+                ws.send_json({"type": "hello", "client_version": "1", "screen_w": 1, "screen_h": 1,
+                              "voice_mode": "replies"})
+                assert ws.receive_json()["type"] == "state"
+                ws.send_json({"type": "user_message", "text": "hi", "voice": True})
+                got = []
+                while not got or got[-1]["type"] != "audio":
+                    got.append(ws.receive_json())
+                    assert len(got) < 10
+                say = next(m for m in got if m["type"] == "say")
+                assert got[-1]["ref_id"] == say["id"] and got[-1]["mime"] == "audio/wav"
+    finally:
+        conn.close()
