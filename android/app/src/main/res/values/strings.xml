@@ -26,6 +26,7 @@
     <string name="voice_always">Always</string>
     <string name="offline_speech_missing">Offline English speech: not installed</string>
     <string name="offline_speech_setup">Set up</string>
+    <string name="offline_speech_downloading">Downloading offline English (US)… If nothing happens, tap Set up again.</string>
     <string name="section_do_not_watch">Never watch these apps (one package per line)</string>
     <string name="start_maya">Start Maya</string>
     <string name="stop_maya">Stop Maya</string>
@@ -46,5 +47,6 @@
     <string name="bubble_unreachable">zzz… (can\'t reach your PC)</string>
     <string name="bubble_no_match">…didn\'t catch that 🤔</string>
     <string name="bubble_mic_failed">I can\'t hear you — check mic permission</string>
+    <string name="bubble_mic_busy">I can\'t hear you — mic busy, try again</string>
     <string name="bubble_no_recognizer">I can\'t hear you — set up offline English speech in my settings</string>
 </resources>

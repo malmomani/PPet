@@ -73,6 +73,8 @@ class MayaService : Service() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     /** Maya is listening to the user (hold to talk). */
     private var listening = false
+    /** The latest clip that arrived while she was listening: played when listening ends. */
+    private var heldAudio: Audio? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -92,6 +94,7 @@ class MayaService : Service() {
         if (!running && !startMaya()) return Service.START_NOT_STICKY
         when (intent?.action) {
             ACTION_SHH -> {
+                heldAudio = null
                 voicePlayer?.stop()
                 emit(UserShush())
             }
@@ -109,6 +112,7 @@ class MayaService : Service() {
         overlayBody?.destroy()
         overlayBody = null
         overlay = null
+        heldAudio = null
         voicePlayer?.release()
         voicePlayer = null
         stopSenses()
@@ -200,7 +204,10 @@ class MayaService : Service() {
     private fun toggleHidden() {
         overlayHidden = !overlayHidden
         updateNotification() // the action now reads Show / Hide
-        if (overlayHidden) voicePlayer?.stop()
+        if (overlayHidden) {
+            heldAudio = null
+            voicePlayer?.stop()
+        }
         val body = overlayBody ?: return
         if (overlayHidden) body.hide() else body.show()
     }
@@ -258,16 +265,29 @@ class MayaService : Service() {
         return interactive && !locked
     }
 
-    /** Her voice stops the moment the user starts talking. */
+    /**
+     * Her voice stops the moment the user starts talking. A reply voiced while she listened plays
+     * once listening ends, if it still belongs to her latest line (VoicePlayer checks the say id).
+     */
     private fun onListening(on: Boolean) {
         listening = on
-        if (on) voicePlayer?.stop()
+        if (on) {
+            voicePlayer?.stop()
+            return
+        }
+        val clip = heldAudio ?: return
+        heldAudio = null
+        if (!overlayHidden) voicePlayer?.play(clip.refId, clip.dataB64)
     }
 
     private fun onAction(a: Action) {
         when (a) {
             is Say -> voicePlayer?.onSay(a.id)
-            is Audio -> if (!listening && !overlayHidden) voicePlayer?.play(a.refId, a.dataB64)
+            is Audio -> when {
+                overlayHidden -> Unit
+                listening -> heldAudio = a // keep only the most recent
+                else -> voicePlayer?.play(a.refId, a.dataB64)
+            }
             else -> Unit
         }
         overlay?.handle(a)

@@ -51,7 +51,9 @@ private const val TAG = "MayaOverlay"
  * ~30 fps Choreographer loop that drives [Behavior], plus her speech bubble and the chat window.
  * The loop only runs while she is visible and the screen is on and unlocked ([setScreenOn]).
  * Holding her still for [HOLD_TO_TALK_MS] starts listening ([VoiceInput]); [onListening] reports
- * when listening starts and ends. Must be created and used on the main thread.
+ * when listening starts and ends. Lines (and typing dots) that arrive while she listens, or while
+ * the bubble still shows what she heard, wait and are shown right after. Must be created and used
+ * on the main thread.
  */
 class OverlayBody(
     context: Context,
@@ -110,6 +112,15 @@ class OverlayBody(
     private var listening = false
     private val holdRunnable = Runnable { onHoldTimer() }
     private val listenCap = Runnable { if (listening) voice.stop() }
+    /** The mic is capturing in the current session ([VoiceInput.Listener.onReady] arrived). */
+    private var micReady = false
+    /** Until this uptime the bubble keeps what listening ended with (heard text or a problem). */
+    private var heardUntilMs = 0L
+    /** The latest line that arrived while the bubble was held; shown when it is released. */
+    private var deferredSay: Say? = null
+    /** The latest typing state that arrived while the bubble was held (null: none). */
+    private var deferredTyping: Boolean? = null
+    private val releaseBubble = Runnable { showDeferred() }
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -142,8 +153,13 @@ class OverlayBody(
         when (a) {
             is Animate -> behavior.play(a.name)
             // While listening the bubble shows what she hears; replies come after it.
-            is Say -> if (visible && !listening) bubble.say(a.text, a.bubbleMs)
-            is Typing -> if (visible && !listening) bubble.typing(a.on)
+            is Say -> if (bubbleHeld()) {
+                deferredSay = a
+                deferredTyping = null // the line replaces the dots that came before it
+            } else if (visible) {
+                bubble.say(a.text, a.bubbleMs)
+            }
+            is Typing -> if (bubbleHeld()) deferredTyping = a.on else if (visible) bubble.typing(a.on)
             is State -> Unit // nothing visible in v1
             is Audio -> Unit // played by the service's VoicePlayer
             is ErrorMsg -> Unit // the service handles auth errors
@@ -159,6 +175,7 @@ class OverlayBody(
         connected = on
         behavior.setConnected(on)
         if (!on) {
+            deferredTyping = null
             bubble.typing(false) // a dropped link would otherwise leave "…" up forever
             chat.close() // messages typed now would be lost
         }
@@ -204,6 +221,9 @@ class OverlayBody(
 
     fun destroy() {
         hide()
+        main.removeCallbacks(releaseBubble)
+        deferredSay = null
+        deferredTyping = null
         voice.destroy()
         destroyed = true
     }
@@ -378,10 +398,15 @@ class OverlayBody(
             return
         }
         chat.close()
-        spriteView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         listening = true
+        micReady = false
+        // Lines still waiting from the last session keep waiting until this one ends.
+        main.removeCallbacks(releaseBubble)
+        heardUntilMs = 0L
         onListening(true) // stops her voice
-        bubble.hold(LISTENING_PREFIX + "…")
+        // Not "🎤" yet: the mic may take a moment to start (Android 14+ opens an activity first).
+        // onReady buzzes and shows the mic, so the user knows when to speak.
+        bubble.hold(WAITING_BUBBLE)
         main.postDelayed(listenCap, MAX_LISTEN_MS)
         voice.start() // may end the session synchronously (no permission, no recognizer)
     }
@@ -399,11 +424,48 @@ class OverlayBody(
         voice.cancel()
         endListening()
         bubble.hide()
+        showDeferred()
+    }
+
+    /** True while lines must wait: she is listening, or the bubble shows how listening ended. */
+    private fun bubbleHeld(): Boolean = listening || SystemClock.uptimeMillis() < heardUntilMs
+
+    /** Listening ended with a bubble ([HEARD_MIN_MS] to read it); waiting lines follow it. */
+    private fun holdEndBubble() {
+        heardUntilMs = SystemClock.uptimeMillis() + HEARD_MIN_MS
+        main.removeCallbacks(releaseBubble)
+        main.postDelayed(releaseBubble, HEARD_MIN_MS)
+    }
+
+    /** Shows the line (or typing dots) that waited while the bubble was held. */
+    private fun showDeferred() {
+        main.removeCallbacks(releaseBubble)
+        heardUntilMs = 0L
+        val say = deferredSay
+        val typing = deferredTyping
+        deferredSay = null
+        deferredTyping = null
+        if (!visible) return
+        if (say != null) {
+            bubble.say(say.text, say.bubbleMs)
+        } else if (typing != null) {
+            bubble.typing(typing)
+        }
     }
 
     private inner class VoiceListener : VoiceInput.Listener {
+        override fun onReady() {
+            if (!listening || micReady) return
+            micReady = true
+            if (!visible) return
+            spriteView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            bubble.hold(LISTENING_PREFIX + "…")
+        }
+
         override fun onPartial(text: String) {
-            if (listening && visible) bubble.hold(LISTENING_PREFIX + text)
+            if (!listening) return
+            micReady = true
+            if (visible) bubble.hold(LISTENING_PREFIX + text)
         }
 
         override fun onFinal(text: String) {
@@ -411,24 +473,32 @@ class OverlayBody(
             endListening()
             if (!connected) {
                 bubble.say(ctx.getString(R.string.bubble_unreachable), UNREACHABLE_BUBBLE_MS)
+                holdEndBubble()
                 return
             }
             emit(UserMessage(text, voice = true))
             if (visible) bubble.say(LISTENING_PREFIX + text, HEARD_BUBBLE_MS)
+            holdEndBubble()
         }
 
         override fun onNoMatch() {
             if (!listening) return
             endListening()
             if (visible) bubble.say(ctx.getString(R.string.bubble_no_match), VOICE_PROBLEM_BUBBLE_MS)
+            holdEndBubble()
         }
 
         override fun onUnavailable(reason: VoiceInput.Reason) {
             // BACKGROUND_DENIED is only a notice: VoiceInput carries on through its activity.
             if (reason == VoiceInput.Reason.BACKGROUND_DENIED || !listening) return
             endListening()
-            val res = if (reason == VoiceInput.Reason.PERMISSION) R.string.bubble_mic_failed else R.string.bubble_no_recognizer
+            val res = when (reason) {
+                VoiceInput.Reason.PERMISSION -> R.string.bubble_mic_failed
+                VoiceInput.Reason.MIC_BUSY -> R.string.bubble_mic_busy
+                else -> R.string.bubble_no_recognizer
+            }
             if (visible) bubble.say(ctx.getString(res), VOICE_PROBLEM_BUBBLE_MS)
+            holdEndBubble()
         }
     }
 
@@ -526,8 +596,10 @@ class OverlayBody(
         const val TOGGLE_WINDOW_MS = 500L
         const val LONG_PRESS_MS = 1000L // a stationary press this long is ignored
         const val LISTENING_PREFIX = "🎤 "
+        const val WAITING_BUBBLE = "…" // hold recognised, mic not capturing yet
         const val MAX_LISTEN_MS = 30_000L
         const val HEARD_BUBBLE_MS = 2500L
+        const val HEARD_MIN_MS = 1500L // nothing replaces the heard text (or a problem) before this
         const val VOICE_PROBLEM_BUBBLE_MS = 4000L
     }
 }

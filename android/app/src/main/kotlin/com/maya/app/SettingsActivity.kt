@@ -30,6 +30,8 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.maya.app.voice.OfflineSpeech
+import com.maya.app.voice.OfflineSpeechStatus
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -52,6 +54,13 @@ class SettingsActivity : Activity() {
     private lateinit var toggleButton: Button
     private lateinit var offlineSpeechRow: LinearLayout
     private val permissionRows = ArrayList<PermissionRow>()
+
+    // Offline English speech (Android 13+ can check). Hidden until a check says it is missing.
+    private var offlineSpeech = OfflineSpeechStatus.INSTALLED
+    private var offlineCheckRunning = false
+    /** The recognizer asked to download English; kept until we close (destroying it may drop the request). */
+    private var downloadRecognizer: SpeechRecognizer? = null
+    private var downloadRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,7 +117,7 @@ class SettingsActivity : Activity() {
         )
         val setupSpeech = Button(this)
         setupSpeech.setText(R.string.offline_speech_setup)
-        setupSpeech.setOnClickListener { openVoiceInputSettings() }
+        setupSpeech.setOnClickListener { onSetUpOfflineSpeech() }
         offlineSpeechRow.addView(
             setupSpeech,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT),
@@ -154,6 +163,13 @@ class SettingsActivity : Activity() {
         // and lets a running service pick up an overlay permission granted while we were away.
         if (prefs.enabled && prefs.wsUrl() != null) startMayaService()
         refreshStatus()
+    }
+
+    override fun onDestroy() {
+        val r = downloadRecognizer
+        downloadRecognizer = null
+        if (r != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) OfflineSpeech.destroyQuietly(r)
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -273,7 +289,8 @@ class SettingsActivity : Activity() {
             row.button.visibility = if (ok) View.GONE else View.VISIBLE
         }
         toggleButton.setText(if (prefs.enabled) R.string.stop_maya else R.string.start_maya)
-        offlineSpeechRow.visibility = if (offlineSpeechMissing()) View.VISIBLE else View.GONE
+        showOfflineSpeech()
+        checkOfflineSpeech()
     }
 
     // ---- permission checks ----
@@ -308,14 +325,46 @@ class SettingsActivity : Activity() {
         requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
     }
 
-    /** No on-device recognizer (API 33+ can tell): hold-to-talk is unavailable until one is installed. */
-    private fun offlineSpeechMissing(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
-        return try {
-            !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
-        } catch (e: RuntimeException) {
-            false
+    /**
+     * Android 13+: asks the on-device recognizer whether English is installed. Without it (or
+     * without any on-device recognizer) hold-to-talk is unavailable, so the row offers to set it up.
+     * When the recognizer can't tell, the row stays hidden.
+     */
+    private fun checkOfflineSpeech() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || offlineCheckRunning) return
+        offlineCheckRunning = true
+        OfflineSpeech.check(this) { status ->
+            offlineCheckRunning = false
+            if (!isDestroyed) {
+                offlineSpeech = status
+                showOfflineSpeech()
+            }
         }
+    }
+
+    private fun showOfflineSpeech() {
+        val missing = offlineSpeech == OfflineSpeechStatus.MISSING || offlineSpeech == OfflineSpeechStatus.NO_RECOGNIZER
+        offlineSpeechRow.visibility = if (missing) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * The first tap asks the on-device recognizer to download English (US); without a recognizer,
+     * if the request fails, or on a later tap (nothing happened), it opens the voice input settings.
+     */
+    private fun onSetUpOfflineSpeech() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            offlineSpeech == OfflineSpeechStatus.MISSING &&
+            !downloadRequested
+        ) {
+            val r = OfflineSpeech.requestEnglishDownload(this)
+            if (r != null) {
+                downloadRecognizer = r
+                downloadRequested = true
+                Toast.makeText(this, R.string.offline_speech_downloading, Toast.LENGTH_LONG).show()
+                return
+            }
+        }
+        openVoiceInputSettings()
     }
 
     private fun openVoiceInputSettings() {

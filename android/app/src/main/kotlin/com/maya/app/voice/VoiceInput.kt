@@ -14,8 +14,9 @@ import android.util.Log
 /**
  * Hold-to-talk speech input. [start] begins a session, [stop] ends capture and delivers the result,
  * [cancel] drops it. Every started session ends with exactly one of [Listener.onFinal],
- * [Listener.onNoMatch] or [Listener.onUnavailable] with [Reason.NO_RECOGNIZER]/[Reason.PERMISSION]
- * (unless cancelled). The recognizer also ends a session by itself after ~2 s of silence.
+ * [Listener.onNoMatch] or [Listener.onUnavailable] with [Reason.NO_RECOGNIZER], [Reason.PERMISSION]
+ * or [Reason.MIC_BUSY] (unless cancelled). [Listener.onReady] reports when the mic is actually
+ * capturing. The recognizer also ends a session by itself after ~2 s of silence.
  * Callbacks may arrive synchronously from [start]. Main thread only. Transcripts are never logged.
  *
  * Privacy: on Android 13+ only the on-device recognizer is used, so audio never leaves the phone;
@@ -29,19 +30,24 @@ import android.util.Log
  */
 class VoiceInput(context: Context, private val listener: Listener) {
     interface Listener {
+        /** The recognizer is capturing: words spoken from now on are heard (may repeat after a retry). */
+        fun onReady()
+
         fun onPartial(text: String)
         fun onFinal(text: String)
         fun onNoMatch()
 
         /**
-         * [Reason.NO_RECOGNIZER] and [Reason.PERMISSION] end the session. [Reason.BACKGROUND_DENIED]
+         * [Reason.NO_RECOGNIZER], [Reason.PERMISSION] and [Reason.MIC_BUSY] end the session.
+         * [Reason.MIC_BUSY] means the mic failed although RECORD_AUDIO is granted (another app holds
+         * it, or Android refused it this time). [Reason.BACKGROUND_DENIED]
          * is only a notice (sent once, below Android 14): the session carries on through
          * [VoiceActivity] if the finger is still down, and later sessions use it from the start.
          */
         fun onUnavailable(reason: Reason)
     }
 
-    enum class Reason { NO_RECOGNIZER, PERMISSION, BACKGROUND_DENIED }
+    enum class Reason { NO_RECOGNIZER, PERMISSION, MIC_BUSY, BACKGROUND_DENIED }
 
     private val ctx: Context = context
     private val main = Handler(Looper.getMainLooper())
@@ -72,7 +78,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
 
     fun start() {
         if (active) return
-        if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (!hasMicPermission()) {
             listener.onUnavailable(Reason.PERMISSION)
             return
         }
@@ -150,6 +156,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
         ready = true
         readyAtMs = SystemClock.uptimeMillis()
         main.removeCallbacks(readyTimeout)
+        listener.onReady()
     }
 
     private fun handleResult(text: String?) {
@@ -164,8 +171,11 @@ class VoiceInput(context: Context, private val listener: Listener) {
 
     private fun handleError(code: Int) {
         when (code) {
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS, SpeechRecognizer.ERROR_AUDIO -> {
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                 if (activityMode) fail(Reason.PERMISSION) else fallbackToActivity()
+            }
+            SpeechRecognizer.ERROR_AUDIO -> {
+                if (activityMode) fail(micFailure()) else fallbackToActivity()
             }
             // No English model for the recognizer. Never fall back to a recognizer that might send
             // audio off the phone: the user installs offline English speech instead.
@@ -181,8 +191,17 @@ class VoiceInput(context: Context, private val listener: Listener) {
                     main.postDelayed(busyRetry, BUSY_RETRY_MS)
                 }
             }
+            // The recognizer service failed before it ever listened (typically: no offline model for
+            // the on-device recognizer). After a release, these are just the end of a short hold.
+            SpeechRecognizer.ERROR_SERVER, SpeechRecognizer.ERROR_SERVER_DISCONNECTED, SpeechRecognizer.ERROR_CLIENT ->
+                if (!ready && !stopRequested) {
+                    fail(Reason.NO_RECOGNIZER)
+                } else {
+                    noteSilence()
+                    deliverHeard()
+                }
             else -> {
-                // No match, speech timeout, client/network errors: deliver what we have.
+                // No match, speech timeout, network errors: deliver what we have.
                 noteSilence()
                 deliverHeard()
             }
@@ -193,7 +212,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
         if (!active || ready) return
         when {
             stopRequested -> deliverHeard() // a quick release, not a refused mic: keep the mode
-            activityMode -> fail(Reason.PERMISSION)
+            activityMode -> fail(micFailure())
             else -> fallbackToActivity()
         }
     }
@@ -255,6 +274,12 @@ class VoiceInput(context: Context, private val listener: Listener) {
     }
 
     // ---- availability ----
+
+    private fun hasMicPermission(): Boolean =
+        ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    /** The mic never started: blame the permission only when it really is missing. */
+    private fun micFailure(): Reason = if (hasMicPermission()) Reason.MIC_BUSY else Reason.PERMISSION
 
     /** Android 13+: the on-device recognizer only. Older: any recognizer service. */
     private fun recognizerAvailable(): Boolean = try {
