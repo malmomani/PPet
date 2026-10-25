@@ -9,6 +9,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
@@ -16,6 +17,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
@@ -23,12 +25,17 @@ import com.maya.app.overlay.OverlayBody
 import com.maya.app.senses.AppUsageSense
 import com.maya.app.senses.DeviceSense
 import com.maya.app.senses.NotificationBridge
+import com.maya.app.senses.ScreenBridge
+import com.maya.app.senses.ScreenSink
 import com.maya.app.voice.VoicePlayer
 import com.maya.core.Action
 import com.maya.core.AppOpened
 import com.maya.core.Audio
 import com.maya.core.DoNotWatch
 import com.maya.core.Event
+import com.maya.core.Glance
+import com.maya.core.GlanceScheduler
+import com.maya.core.Layout
 import com.maya.core.NotificationFilter
 import com.maya.core.NotificationInfo
 import com.maya.core.Say
@@ -49,6 +56,13 @@ interface OverlayHook {
 
     /** Her spoken reply finished or was stopped. */
     fun onVoiceEnded()
+
+    /**
+     * What she can stand on and tease in the current app (Layout.EMPTY: only the floor), the
+     * keyboard's top edge in screen pixels while one is open, and [restricted]: no teasing now
+     * (keyboard open, a do-not-watch app, or a call).
+     */
+    fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean)
 }
 
 /**
@@ -83,6 +97,26 @@ class MayaService : Service() {
     private var listening = false
     /** The latest clip that arrived while she was listening: played when listening ends. */
     private var heldAudio: Audio? = null
+
+    // Screen sense ("Let Maya read my screen"); all null/empty while it is off.
+    private val main = Handler(Looper.getMainLooper())
+    /** Our [ScreenBridge.sink]. */
+    private var screenSink: ScreenSink? = null
+    /** Recreated on every connect, so she glances at the current screen soon after (re)connecting. */
+    private var glanceScheduler: GlanceScheduler? = null
+    /** The foreground app as the accessibility service last reported it. */
+    private var screenPkg: String? = null
+    /** The latest layout and the app it came from (null: none yet), kept for a new overlay. */
+    private var screenLayoutPkg: String? = null
+    private var screenLayout: Layout = Layout.EMPTY
+    private var screenKeyboardTop: Int? = null
+    private var screenRestricted = false
+    private val glanceTick = object : Runnable {
+        override fun run() {
+            onGlanceTick()
+            if (running && screenSink != null) main.postDelayed(this, GLANCE_TICK_MS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -207,6 +241,7 @@ class MayaService : Service() {
         }
         body.setConnected(status == Status.HERE)
         body.setScreenOn(screenUsable())
+        if (screenLayoutPkg != null) body.setScreenLayout(screenLayout, screenKeyboardTop, screenRestricted)
         overlayBody = body
         overlay = body
         body.show()
@@ -240,6 +275,19 @@ class MayaService : Service() {
             notificationSink = sink
             NotificationBridge.sink = sink
         }
+        if (prefs.readScreen) {
+            // The accessibility service (Screen access) reports on the main thread.
+            glanceScheduler = GlanceScheduler()
+            val sink = object : ScreenSink {
+                override fun onLayout(pkg: String, layout: Layout, keyboardTop: Int?) = onScreenLayout(pkg, layout, keyboardTop)
+
+                override fun onApp(pkg: String?) = onScreenApp(pkg)
+            }
+            screenSink = sink
+            ScreenBridge.sink = sink
+            main.postDelayed(glanceTick, GLANCE_TICK_MS)
+            ScreenBridge.service?.refresh() // already connected: report the current app and layout now
+        }
     }
 
     private fun stopSenses() {
@@ -250,6 +298,80 @@ class MayaService : Service() {
         // Only clear our own sink, never one a newer service instance already set.
         if (NotificationBridge.sink === notificationSink) NotificationBridge.sink = null
         notificationSink = null
+        main.removeCallbacks(glanceTick)
+        if (ScreenBridge.sink === screenSink) ScreenBridge.sink = null
+        screenSink = null
+        glanceScheduler = null
+        screenPkg = null
+    }
+
+    /** The accessibility service saw another foreground app (Maya's own windows never count). */
+    private fun onScreenApp(pkg: String?) {
+        if (!running) return
+        screenPkg = pkg
+        glanceScheduler?.onApp(pkg, SystemClock.elapsedRealtime())
+    }
+
+    /** A new layout of the current app: handed to her body with whether teasing is off for now. */
+    private fun onScreenLayout(pkg: String, layout: Layout, keyboardTop: Int?) {
+        if (!running) return
+        screenLayoutPkg = pkg
+        screenLayout = layout
+        screenKeyboardTop = keyboardTop
+        screenRestricted = isRestricted(pkg, keyboardTop)
+        overlay?.setScreenLayout(layout, keyboardTop, screenRestricted)
+    }
+
+    /** No teasing while the user types, in a do-not-watch app, or during a call. */
+    private fun isRestricted(pkg: String, keyboardTop: Int?): Boolean =
+        keyboardTop != null || doNotWatch.isBlocked(pkg) || inCall()
+
+    private fun inCall(): Boolean {
+        val mode = getSystemService(AudioManager::class.java)?.mode ?: return false
+        return mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION
+    }
+
+    /**
+     * Every [GLANCE_TICK_MS]: keeps "restricted" current (a call starts without any screen change)
+     * and, when the scheduler says a glance is due, takes one and sends it if the text changed.
+     */
+    private fun onGlanceTick() {
+        val scheduler = glanceScheduler ?: return
+        if (ScreenBridge.service == null && screenLayoutPkg != null) forgetScreen(scheduler)
+        val layoutPkg = screenLayoutPkg
+        if (layoutPkg != null) {
+            val restricted = isRestricted(layoutPkg, screenKeyboardTop)
+            if (restricted != screenRestricted) {
+                screenRestricted = restricted
+                overlay?.setScreenLayout(screenLayout, screenKeyboardTop, restricted)
+            }
+        }
+        val pkg = screenPkg
+        val now = SystemClock.elapsedRealtime()
+        val allowed = status == Status.HERE && pkg != null && !doNotWatch.isBlocked(pkg) && screenUsable()
+        if (!scheduler.poll(now, allowed)) return
+        val g = ScreenBridge.service?.glance() ?: return
+        if (doNotWatch.isBlocked(g.packageName)) return
+        if (scheduler.taken(g.packageName, g.lines, now)) emit(Glance(g.packageName, g.app, g.lines, g.targets))
+    }
+
+    /** Screen access was turned off while she ran: the last layout is stale, so she keeps only the floor. */
+    private fun forgetScreen(scheduler: GlanceScheduler) {
+        screenPkg = null
+        scheduler.onApp(null, SystemClock.elapsedRealtime())
+        screenLayoutPkg = null
+        screenLayout = Layout.EMPTY
+        screenKeyboardTop = null
+        screenRestricted = false
+        overlay?.setScreenLayout(Layout.EMPTY, null, false)
+    }
+
+    /** On every connect: fresh glance memory, and a glance at the current app soon. */
+    private fun restartGlances() {
+        if (glanceScheduler == null) return
+        val scheduler = GlanceScheduler()
+        glanceScheduler = scheduler
+        scheduler.onApp(screenPkg, SystemClock.elapsedRealtime())
     }
 
     /**
@@ -263,6 +385,7 @@ class MayaService : Service() {
                 emit(e)
                 appUsage?.setScreenOn(true)
                 overlay?.setScreenOn(true)
+                if (screenSink != null) ScreenBridge.service?.refresh()
             } else {
                 overlay?.setScreenOn(false)
                 appUsage?.setScreenOn(false) // emits AppClosed for the current app first
@@ -320,7 +443,10 @@ class MayaService : Service() {
         status = if (on) Status.HERE else Status.NAPPING
         updateNotification()
         overlay?.setConnected(on)
-        if (on) reemitState()
+        if (on) {
+            reemitState()
+            restartGlances()
+        }
     }
 
     private fun onAuthError() {
@@ -393,6 +519,7 @@ class MayaService : Service() {
         private const val CHANNEL_ID = "maya"
         private const val NOTIFICATION_ID = 1
         private const val MAX_MESSAGE_CHARS = 2000
+        private const val GLANCE_TICK_MS = 1000L
         private const val TAG = "MayaService"
     }
 }

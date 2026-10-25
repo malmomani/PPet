@@ -64,6 +64,7 @@ New-NetFirewallRule -DisplayName "Maya brain" -Direction Inbound -Protocol TCP -
    - **Ignore battery optimisation**: this opens a list of apps. At the top, switch the filter to **All apps**, find **Maya**, and choose **Don't optimise** (the wording varies on Samsung). The Samsung **Unrestricted** step in section 6 matters most, so do that too.
    - **Microphone (hold Maya to talk)**: tap **While using the app** (or **Allow**). Only needed if you want to talk to her out loud; see section 7.
    - **Notification access (who messages you)**: find Maya, switch it on. Optional; see section 8.
+   - **Screen access**: find Maya in the accessibility list, switch her on. Optional; see section 9.
 5. Do the Samsung battery steps below, then come back.
 6. Tap **Start Maya**. She should appear on screen. The notification first says "Maya is napping" and changes to "Maya is here" once she's connected to your PC.
 
@@ -111,6 +112,16 @@ Maya can notice when someone messages you (WhatsApp, SMS, Telegram, email, a mis
 
 **Privacy.** Only the app name and the sender's name (and the group name for group chats) go to your PC. The message text is never read, not even on the phone. Apps in the **Never watch these apps** list (and anything with "bank" in its package name) are ignored.
 
+## 9. Let Maya see your screen
+
+Maya can read what's on the screen of the app you're using: its visible text (so she can talk about what you're looking at) and its buttons (so she can stand on them, sit on a **Send** or **Like** button to tease you, and fall off when you scroll). She never presses anything.
+
+1. In the app, under **Permissions**, tap **Grant** next to **Screen access**. Android opens **Accessibility**. On Samsung, tap **Installed apps** (or **Downloaded apps**), then **Maya**, and switch it on. Android warns that the app can see your screen; tap **Allow**.
+2. If the switch is greyed out or Android says it's a **restricted setting** (common for apps installed from an APK), go to **Settings** → **Apps** → **Maya**, tap **⋮** (top right) → **Allow restricted settings**, confirm with your PIN or fingerprint, then go back and switch Maya on.
+3. Make sure **Let Maya read my screen** (under **Screen**) is on. It is on by default; switch it off to stop this completely (Maya restarts for a second). With it off she only walks along the bottom of the screen.
+
+**Privacy.** Only the visible text of the app you're in (at most 40 short lines) and a short list of button kinds (send, like, play, search, share, comment, follow) go to your PC, and only now and then: soon after you switch apps, then at most every 3 minutes if the text changed. She never reads passwords or what you type, and never looks at the lock screen, the notification shade, her own settings, or apps in the **Never watch these apps** list (and anything with "bank" in its package name). On your PC she keeps one headline per glance in her memory; the full text is only kept in memory as "the latest screen". To stop it, switch off **Let Maya read my screen** or turn Maya off in **Accessibility**.
+
 ## Troubleshooting
 
 | What you see | What to do |
@@ -119,6 +130,7 @@ Maya can notice when someone messages you (WhatsApp, SMS, Telegram, email, a mis
 | "Check the token in settings" | The token doesn't match `maya.toml`. Re-copy it exactly (no spaces), tap **Save**. |
 | Maya doesn't comment on apps | **Usage access** is missing. In the app, tap **Grant** next to it and switch it on for Maya. |
 | Maya never mentions messages | Check **Notification access** has a tick (✓) and **Let Maya see who messages me** is on. If the switch for Maya in Android's notification access list is greyed out, allow restricted settings (section 8). |
+| Maya never talks about what's on screen, or only walks along the bottom | Check **Screen access** has a tick (✓) and **Let Maya read my screen** is on. If the switch for Maya in Android's accessibility list is greyed out, allow restricted settings (section 9). After the app is updated, Android sometimes turns screen access off: switch it on again. |
 | Maya isn't visible | **Draw over other apps** isn't granted, or **Hide** was tapped in the notification. Tap **Hide** again to bring her back, or open the app and check the permissions list. |
 | Maya disappears after a while | Samsung put her to sleep. Redo the battery steps in section 6. |
 | Nothing works after the PC restarts | Start the brain again (step 3). |

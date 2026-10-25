@@ -40,6 +40,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_SEE_NOTIFICATIONS, true)
         set(value) = sp.edit().putBoolean(KEY_SEE_NOTIFICATIONS, value).apply()
 
+    /** "Let Maya read my screen": the visible text and buttons of the current app (Screen access). */
+    var readScreen: Boolean
+        get() = sp.getBoolean(KEY_READ_SCREEN, true)
+        set(value) = sp.edit().putBoolean(KEY_READ_SCREEN, value).apply()
+
     /** The brain's WebSocket URL, or null until both host and token are set. Contains the token: never log it. */
     fun wsUrl(): String? {
         val h = host.trim()
@@ -63,5 +68,6 @@ class Prefs(context: Context) {
         private const val KEY_DO_NOT_WATCH = "do_not_watch"
         private const val KEY_VOICE_MODE = "voice_mode"
         private const val KEY_SEE_NOTIFICATIONS = "see_notifications"
+        private const val KEY_READ_SCREEN = "read_screen"
     }
 }

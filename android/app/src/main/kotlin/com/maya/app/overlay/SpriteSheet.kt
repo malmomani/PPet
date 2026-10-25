@@ -38,7 +38,7 @@ class SpriteSheet(assets: AssetManager) {
         return Rect(left, top, left + config.frameW, top + config.frameH)
     }
 
-    private companion object {
+    internal companion object {
         const val PNG = "sprites/maya.png"
         const val JSON = "sprites/sprites.json"
     }

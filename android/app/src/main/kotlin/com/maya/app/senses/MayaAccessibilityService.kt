@@ -1,0 +1,364 @@
+package com.maya.app.senses
+
+import android.accessibilityservice.AccessibilityService
+import android.annotation.SuppressLint
+import android.app.KeyguardManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.Resources
+import android.graphics.Rect
+import android.hardware.display.DisplayManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
+import android.util.DisplayMetrics
+import android.util.Log
+import android.view.Display
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import com.maya.app.Prefs
+import com.maya.app.overlay.SpriteMetrics
+import com.maya.core.Box
+import com.maya.core.DoNotWatch
+import com.maya.core.Layout
+import com.maya.core.TEASE_TAGS
+import com.maya.core.TextNode
+import com.maya.core.UiNode
+import com.maya.core.buildLayout
+import com.maya.core.extractLines
+import kotlin.math.roundToInt
+
+/**
+ * Maya's eyes. Needs the special "Accessibility" permission (config: res/xml/accessibility_config.xml;
+ * it never performs gestures or clicks). Reads only the active window's node tree plus the window
+ * list (to find the keyboard), and only while MayaService runs with "Let Maya read my screen" on
+ * ([ScreenBridge.sink] set):
+ * - on events it rebuilds the layout (platforms + tease targets) at most every 500 ms and reports
+ *   it, and app changes, to the sink;
+ * - it reads the visible text only when MayaService asks for a [glance].
+ * Never reads password nodes, the content of editable nodes (or anything inside them), do-not-watch
+ * apps, Maya herself, system UI or the lock screen. Never logs screen text. Callbacks and every
+ * call into it happen on the main thread.
+ */
+class MayaAccessibilityService : AccessibilityService(), GlanceSource {
+    private class Seen(val ui: List<UiNode>, val text: List<TextNode>)
+
+    private val main = Handler(Looper.getMainLooper())
+    private val labels = HashMap<String, String>()
+
+    /** The sink our state was last reported to; a new sink (a new MayaService run) is told everything again. */
+    private var boundSink: ScreenSink? = null
+    /** Read from Prefs whenever a new sink is bound (the service restarts when the list is saved). */
+    private var doNotWatch = DoNotWatch(emptySet())
+    /** The app last reported to [boundSink] with onApp. */
+    private var reportedPkg: String? = null
+
+    private var lastLayoutMs = 0L
+    private var layoutPending = false
+    private val layoutTask = Runnable {
+        layoutPending = false
+        rebuild()
+    }
+
+    private var metrics: SpriteMetrics? = null
+    private var metricsDensity = 0f
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        ScreenBridge.service = this
+        refresh()
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (ScreenBridge.sink == null) return
+        scheduleLayout()
+    }
+
+    override fun onInterrupt() = Unit
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        detach()
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        detach()
+        super.onDestroy()
+    }
+
+    override fun refresh() {
+        if (ScreenBridge.sink == null) return
+        scheduleLayout()
+    }
+
+    override fun glance(): GlanceData? {
+        val sink = ScreenBridge.sink ?: return null
+        bindTo(sink)
+        return try {
+            val root = rootInActiveWindow ?: return null
+            try {
+                val pkg = root.packageName?.toString() ?: return null
+                if (!readable(pkg)) return null
+                val seen = collect(root, withText = true)
+                val tags = layoutOf(seen.ui, keyboardTop()).targets.map { it.tag }.toSet()
+                GlanceData(pkg, appName(pkg), extractLines(seen.text), TEASE_TAGS.filter { it in tags })
+            } finally {
+                release(root)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not glance at the screen: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    private fun detach() {
+        main.removeCallbacks(layoutTask)
+        layoutPending = false
+        boundSink = null
+        if (ScreenBridge.service === this) ScreenBridge.service = null
+    }
+
+    private fun bindTo(sink: ScreenSink) {
+        if (sink === boundSink) return
+        boundSink = sink
+        reportedPkg = null
+        doNotWatch = DoNotWatch(Prefs(this).doNotWatch)
+    }
+
+    // ---- layout ----
+
+    /** Trailing-edge throttle: at most one rebuild per [LAYOUT_GAP_MS], and the latest state always lands. */
+    private fun scheduleLayout() {
+        if (layoutPending) return
+        layoutPending = true
+        val wait = (lastLayoutMs + LAYOUT_GAP_MS - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+        main.postDelayed(layoutTask, wait)
+    }
+
+    private fun rebuild() {
+        val sink = ScreenBridge.sink ?: return
+        lastLayoutMs = SystemClock.uptimeMillis()
+        bindTo(sink)
+        try {
+            val keyboardTop = keyboardTop()
+            val root = rootInActiveWindow ?: return
+            try {
+                val pkg = root.packageName?.toString() ?: return
+                // Maya's own windows (settings, chat) are transparent: the app behind is still "the app".
+                if (pkg != packageName && pkg != reportedPkg) {
+                    reportedPkg = pkg
+                    sink.onApp(pkg)
+                }
+                val layout = if (readable(pkg)) layoutOf(collect(root, withText = false).ui, keyboardTop) else Layout.EMPTY
+                sink.onLayout(pkg, layout, keyboardTop)
+            } finally {
+                release(root)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read the screen: ${e.javaClass.simpleName}")
+        }
+    }
+
+    private fun layoutOf(ui: List<UiNode>, keyboardTop: Int?): Layout {
+        val sprite = spriteMetrics()
+        return buildLayout(
+            nodes = ui,
+            screenW = screenWidth(),
+            spriteW = sprite.width,
+            spriteH = sprite.height,
+            statusBarH = statusBarHeight(),
+            keyboardTop = keyboardTop,
+            minImagePx = dp(MIN_IMAGE_DP),
+        )
+    }
+
+    /** False for apps she must never read: do-not-watch, Maya herself, system UI, a locked or dark screen. */
+    private fun readable(pkg: String): Boolean {
+        if (pkg == packageName || pkg == SYSTEM_UI || doNotWatch.isBlocked(pkg)) return false
+        val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked ?: true
+        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: false
+        return interactive && !locked
+    }
+
+    // ---- node tree ----
+
+    /**
+     * Depth-first over the visible nodes, at most [MAX_NODES] per pass. Password nodes give no
+     * text or description and editable nodes no text; neither is descended into. Text nodes are
+     * collected only when [withText].
+     */
+    private fun collect(root: AccessibilityNodeInfo, withText: Boolean): Seen {
+        val ui = ArrayList<UiNode>()
+        val text = ArrayList<TextNode>()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        val r = Rect()
+        stack.addLast(root)
+        var visited = 0
+        try {
+            while (stack.isNotEmpty() && visited < MAX_NODES) {
+                val node = stack.removeLast()
+                visited++
+                try {
+                    if (node.isVisibleToUser) {
+                        node.getBoundsInScreen(r)
+                        val password = node.isPassword
+                        val editable = node.isEditable
+                        val description = if (password) null else node.contentDescription?.toString()
+                        val label = if (password || editable) null else node.text?.toString()
+                        ui.add(
+                            UiNode(
+                                bounds = Box(r.left, r.top, r.right, r.bottom),
+                                clickable = node.isClickable,
+                                editable = editable,
+                                image = isImage(node),
+                                viewId = node.viewIdResourceName,
+                                description = description,
+                                text = label,
+                            ),
+                        )
+                        if (!password && !editable) {
+                            if (withText) {
+                                val line = if (!label.isNullOrBlank()) label else description
+                                if (!line.isNullOrBlank()) text.add(TextNode(line, r.top, r.left, password = false, editable = false))
+                            }
+                            // Pushed last-first so the first child is visited first.
+                            for (i in node.childCount - 1 downTo 0) {
+                                val child = node.getChild(i)
+                                if (child != null) stack.addLast(child)
+                            }
+                        }
+                    }
+                } finally {
+                    if (node !== root) release(node)
+                }
+            }
+        } finally {
+            while (stack.isNotEmpty()) {
+                val left = stack.removeLast()
+                if (left !== root) release(left)
+            }
+        }
+        return Seen(ui, text)
+    }
+
+    private fun isImage(node: AccessibilityNodeInfo): Boolean {
+        val cls = node.className?.toString() ?: return false
+        return cls.endsWith("ImageView") || cls.endsWith("ImageButton") || cls == "android.widget.Image"
+    }
+
+    /** Top edge (screen px) of the input-method window, or null when no keyboard is showing. */
+    private fun keyboardTop(): Int? {
+        val list: List<AccessibilityWindowInfo>? = windows
+        if (list == null) return null
+        val r = Rect()
+        var top: Int? = null
+        for (w in list) {
+            if (top == null && w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                w.getBoundsInScreen(r)
+                if (r.height() > 0) top = r.top
+            }
+            release(w)
+        }
+        return top
+    }
+
+    // ---- sizes ----
+
+    private fun spriteMetrics(): SpriteMetrics {
+        val density = resources.displayMetrics.density
+        val cached = metrics
+        if (cached != null && density == metricsDensity) return cached
+        val fresh = SpriteMetrics.forContext(this)
+        metrics = fresh
+        metricsDensity = density
+        return fresh
+    }
+
+    @Suppress("DEPRECATION")
+    private fun screenWidth(): Int {
+        val display = getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+        if (display != null) {
+            val dm = DisplayMetrics()
+            display.getRealMetrics(dm)
+            if (dm.widthPixels > 0) return dm.widthPixels
+        }
+        return resources.displayMetrics.widthPixels
+    }
+
+    @SuppressLint("DiscouragedApi", "InternalInsetResource")
+    private fun statusBarHeight(): Int {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        val px = if (id > 0) {
+            try {
+                resources.getDimensionPixelSize(id)
+            } catch (e: Resources.NotFoundException) {
+                0
+            }
+        } else {
+            0
+        }
+        return if (px > 0) px else dp(STATUS_BAR_FALLBACK_DP)
+    }
+
+    private fun dp(v: Float): Int = (v * resources.displayMetrics.density).roundToInt()
+
+    @Suppress("DEPRECATION")
+    private fun appName(pkg: String): String = labels.getOrPut(pkg) {
+        val label = try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+        } catch (e: PackageManager.NameNotFoundException) {
+            null
+        }
+        clampAppName(label, pkg)
+    }
+
+    private companion object {
+        const val TAG = "MayaScreen"
+        const val SYSTEM_UI = "com.android.systemui"
+        const val MAX_NODES = 600
+        const val LAYOUT_GAP_MS = 500L
+        const val MIN_IMAGE_DP = 48f
+        const val STATUS_BAR_FALLBACK_DP = 24f
+    }
+}
+
+private const val MAX_APP_CHARS = 100
+
+/**
+ * The app name for a glance: 1–[MAX_APP_CHARS] chars (the brain rejects anything else). The label,
+ * trimmed and cut without splitting a surrogate pair; the package name when there is no label.
+ */
+internal fun clampAppName(label: String?, pkg: String): String {
+    val name = capChars(label?.trim().orEmpty(), MAX_APP_CHARS).trim()
+    if (name.isNotEmpty()) return name
+    return capChars(pkg.trim(), MAX_APP_CHARS).ifEmpty { "app" }
+}
+
+private fun capChars(s: String, max: Int): String {
+    val t = s.take(max)
+    return if (t.isNotEmpty() && t.last().isHighSurrogate()) t.dropLast(1) else t
+}
+
+/** Node infos must be recycled before Android 13; from 13 on recycling is a no-op. */
+@Suppress("DEPRECATION")
+private fun release(n: AccessibilityNodeInfo) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+    try {
+        n.recycle()
+    } catch (e: IllegalStateException) {
+        // Already recycled.
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun release(w: AccessibilityWindowInfo) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+    try {
+        w.recycle()
+    } catch (e: IllegalStateException) {
+        // Already recycled.
+    }
+}

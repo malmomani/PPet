@@ -32,6 +32,7 @@ import com.maya.core.ErrorMsg
 import com.maya.core.Event
 import com.maya.core.Gesture
 import com.maya.core.HOLD_TO_TALK_MS
+import com.maya.core.Layout
 import com.maya.core.Move
 import com.maya.core.Say
 import com.maya.core.State
@@ -189,6 +190,9 @@ class OverlayBody(
         speaking = false
         updatePose()
     }
+
+    /** The current app's platforms and targets; used once the body is 2-D (Task 8). */
+    override fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean) {}
 
     /** Sustained pose from what's going on: listening beats talking beats thinking. */
     private fun updatePose() {

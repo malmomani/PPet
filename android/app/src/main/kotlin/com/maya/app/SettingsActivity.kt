@@ -32,6 +32,7 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.maya.app.senses.MayaAccessibilityService
 import com.maya.app.senses.MayaNotificationListener
 import com.maya.app.voice.OfflineSpeech
 import com.maya.app.voice.OfflineSpeechStatus
@@ -110,6 +111,9 @@ class SettingsActivity : Activity() {
         addPermissionRow(root, R.string.perm_notification_access, { hasNotificationAccess() }) {
             openSettings(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
+        addPermissionRow(root, R.string.perm_screen_access, { hasScreenAccess() }) {
+            openSettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
 
         // Maya's voice
         root.addView(text(getString(R.string.section_voice), 18f, bold = true), matchWrap(top = 20))
@@ -139,6 +143,16 @@ class SettingsActivity : Activity() {
         seeNotifications.setOnCheckedChangeListener { _, checked -> onSeeNotificationsChanged(checked) }
         root.addView(seeNotifications, matchWrap(top = 4))
         root.addView(text(getString(R.string.see_notifications_note), 14f), matchWrap(top = 2))
+
+        // Screen (accessibility service)
+        root.addView(text(getString(R.string.section_screen), 18f, bold = true), matchWrap(top = 20))
+        val readScreen = Switch(this)
+        readScreen.setText(R.string.read_screen)
+        readScreen.textSize = 16f
+        readScreen.isChecked = prefs.readScreen
+        readScreen.setOnCheckedChangeListener { _, checked -> onReadScreenChanged(checked) }
+        root.addView(readScreen, matchWrap(top = 4))
+        root.addView(text(getString(R.string.read_screen_note), 14f), matchWrap(top = 2))
 
         // Do-not-watch list
         root.addView(text(getString(R.string.section_do_not_watch), 18f, bold = true), matchWrap(top = 20))
@@ -230,6 +244,12 @@ class SettingsActivity : Activity() {
         if (on == prefs.seeNotifications) return
         prefs.seeNotifications = on
         restartMayaService() // so the service starts or stops listening
+    }
+
+    private fun onReadScreenChanged(on: Boolean) {
+        if (on == prefs.readScreen) return
+        prefs.readScreen = on
+        restartMayaService() // so the service starts or stops reading the screen
     }
 
     private fun onToggleClicked() {
@@ -351,6 +371,18 @@ class SettingsActivity : Activity() {
                 ?.contains(component.flattenToString()) == true
         } catch (e: SecurityException) {
             getSystemService(NotificationManager::class.java)?.isNotificationListenerAccessGranted(component) ?: false
+        }
+    }
+
+    /** Screen access: our accessibility service is in the system's enabled list. */
+    private fun hasScreenAccess(): Boolean {
+        val component = ComponentName(this, MayaAccessibilityService::class.java)
+        return try {
+            val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                ?: return false
+            enabled.split(':').any { ComponentName.unflattenFromString(it.trim()) == component }
+        } catch (e: SecurityException) {
+            false
         }
     }
 

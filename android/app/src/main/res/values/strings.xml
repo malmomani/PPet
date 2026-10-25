@@ -20,6 +20,7 @@
     <string name="perm_battery">Ignore battery optimisation</string>
     <string name="perm_mic">Microphone (hold Maya to talk)</string>
     <string name="perm_notification_access">Notification access (who messages you)</string>
+    <string name="perm_screen_access">Screen access</string>
     <string name="grant">Grant</string>
     <string name="section_voice">Maya\'s voice</string>
     <string name="voice_off">Off</string>
@@ -31,9 +32,15 @@
     <string name="section_messages">Messages</string>
     <string name="see_notifications">Let Maya see who messages me</string>
     <string name="see_notifications_note">She only sees the app and who it\'s from (and the group name), never the message itself. Needs Notification access above.</string>
+    <string name="section_screen">Screen</string>
+    <string name="read_screen">Let Maya read my screen</string>
+    <string name="read_screen_note">She sees the text and buttons of the app you\'re using, so she can talk about it and sit on its buttons. Never passwords, never what you type, never the apps in the list below. She never presses anything. Needs Screen access above.</string>
     <string name="section_do_not_watch">Never watch these apps (one package per line)</string>
     <string name="start_maya">Start Maya</string>
     <string name="stop_maya">Stop Maya</string>
+
+    <!-- Accessibility service (shown in Android's accessibility settings) -->
+    <string name="accessibility_description">Lets Maya see the text and buttons of the app you\'re using. She never presses anything.</string>
 
     <!-- Service -->
     <string name="channel_name">Maya</string>
