@@ -59,4 +59,13 @@ class GlanceSchedulerTest {
         assertTrue(g.poll(500_001, true))
         assertFalse(g.poll(500_002, true))
     }
+
+    @Test fun failed_capture_retries_after_period() {
+        val g = GlanceScheduler()
+        g.onApp("com.x", 0)
+        assertTrue(g.poll(2_000, true))
+        // capture failed: taken() is never called
+        assertFalse(g.poll(181_999, true))
+        assertTrue(g.poll(182_000, true))
+    }
 }

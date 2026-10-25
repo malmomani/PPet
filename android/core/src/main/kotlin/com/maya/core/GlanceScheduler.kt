@@ -17,11 +17,14 @@ class GlanceScheduler(private val settleMs: Long = 2_000, private val periodMs: 
         dueAtMs = if (pkg == null) null else nowMs + settleMs
     }
 
-    /** True once when a glance is due and [allowed]; while not allowed it stays due. */
+    /**
+     * True once when a glance is due and [allowed]; while not allowed it stays due. Returning true
+     * also arms the next check at now + period, so a failed capture retries a period later.
+     */
     fun poll(nowMs: Long, allowed: Boolean): Boolean {
         val due = dueAtMs ?: return false
         if (!allowed || nowMs < due) return false
-        dueAtMs = null
+        dueAtMs = nowMs + periodMs
         return true
     }
 
