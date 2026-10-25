@@ -43,8 +43,9 @@ two ways:
 
 ## 3. Protocol (backward compatible)
 
-### Event `screen` (phone → brain)
-`{type:"screen", id, ts, package, app, lines: string[], targets: string[]}`
+### Event `glance` (phone → brain)
+(`screen` is already the screen on/off event.)
+`{type:"glance", id, ts, package, app, lines: string[], targets: string[]}`
 - `app` 1–100 chars. `lines`: ≤ 40 items, each 1–200 chars (brain truncates longer items and drops
   extras rather than rejecting). `targets`: subset of the tease tags (§4.3); unknown tags dropped.
 - Not queued while disconnected (a stale screen is useless) and not part of `offline_summary`.
@@ -176,7 +177,7 @@ platform scrolled/vanished; the user tapped her off a tease target. Not queued.
 
 ## 5. Brain
 
-- **Protocol:** `ScreenEvent` (lenient caps per §3), `BodyEvent`, `BodyMomentEvent`; `Move` action
+- **Protocol:** `GlanceEvent` (lenient caps per §3), `BodyEvent`, `BodyMomentEvent`; `Move` action
   with `intent: Literal[*MOVE_INTENTS]`, `target: Literal[*TEASE_TARGETS] | None`.
 - **Mind:**
   - Keeps the latest screen in memory (not persisted): app, lines, targets, time.
@@ -184,7 +185,7 @@ platform scrolled/vanished; the user tapped her off a tease target. Not queued.
     letters (else the first line), ≤ 120 chars.
   - Thinker context: when the latest screen is ≤ 10 min old, adds "On screen now ({app}):" with up to
     25 lines / 1500 chars.
-  - A screen event is activity-neutral (no came-back bump, no idle reset), like notifications.
+  - A glance is activity-neutral (no came-back bump, no idle reset), like notifications.
 - **Initiative:** `+4` urge with reason `"something new on screen in {app}"`, at most once per 5 min.
 - **Self-model:** the persona block gains a fixed paragraph: she is a small girl who lives on the
   user's phone screen; she can walk, jump onto buttons and boxes, sit, nap, peek from the edges, and
@@ -212,7 +213,7 @@ platform scrolled/vanished; the user tapped her off a tease target. Not queued.
     mentioned and any tease returned is dropped (other intents still go through). A sent tease is
     recorded (`"you teased the user: {intent} {target}"` as an event turn) and starts the 600 s
     cooldown. Silent body thoughts may tease too, under the same rules.
-- **Simulator:** `/screen <app> <line>[ | <line>...] [targets=send,like]` sends a `ScreenEvent`;
+- **Simulator:** `/glance <app> <line>[ | <line>...] [targets=send,like]` sends a `GlanceEvent`;
   `/body <doing> [where] [target]` and `/moment fell|shooed [target]` send body events; incoming
   `move` actions are printed.
 
@@ -232,11 +233,11 @@ in RAM as "the latest screen". Turning the switch off or revoking access stops a
   fall, keyboard → floor only, tease sit 4–8 s with 8 s cap, tap during tease → sulk then off,
   playfulness table, each move intent, move replaced by move, moves ignored while dragged);
   body reporter (change detection, 5 s throttle, flush, resend on connect); body state for renderers;
-  animation fallbacks; protocol encode `screen`/`body`/`body_moment`, decode `move`.
-- Brain (pytest): `ScreenEvent` parse + lenient caps; memory headline; thinker context age rule;
+  animation fallbacks; protocol encode `glance`/`body`/`body_moment`, decode `move`.
+- Brain (pytest): `GlanceEvent` parse + lenient caps; memory headline; thinker context age rule;
   urge +4 with 5-min limit; activity-neutral; body line in prompt; body moments → memory; move parsed
   and sent after say, invalid dropped; tease allowed/blocked by each guardrail; cooldown persisted;
-  silent body thought timer (gating, no urge change, speak forced false); sims `/screen`, `/body`,
+  silent body thought timer (gating, no urge change, speak forced false); sims `/glance`, `/body`,
   `/moment`.
 - App: CI build; on-device checklist (grant access, glance in Chrome, password field skipped,
   typing not read, do-not-watch app, roaming onto buttons, scroll → fall, keyboard → floor, tease
