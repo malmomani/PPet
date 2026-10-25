@@ -2,6 +2,7 @@ package com.maya.core
 
 import java.time.Instant
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -38,11 +39,12 @@ class ProtocolTest {
         val types = listOf(
             Hello("1", 1, 1), UserMessage("hi"), UserTap(), UserDrag(true), UserShush(), AppOpened("p", "L"),
             AppClosed("p", "L", 0), Screen(true), Charging(false), OfflineSummary(emptyList(), Instant.EPOCH),
+            Notification("p", "A", "S"),
         ).map { Json.parseToJsonElement(Protocol.encode(it)).jsonObject["type"]!!.jsonPrimitive.content }
         assertEquals(
             listOf(
                 "hello", "user_message", "user_tap", "user_drag", "user_shush", "app_opened",
-                "app_closed", "screen", "charging", "offline_summary",
+                "app_closed", "screen", "charging", "offline_summary", "notification",
             ),
             types,
         )
@@ -123,5 +125,24 @@ class ProtocolTest {
         assertNull(Protocol.decodeAction("""{"type":"audio","ref_id":"abc","mime":"audio/wav"}"""))
         assertNull(Protocol.decodeAction("""{"type":"audio","ref_id":"abc","data_b64":"UklGRg=="}"""))
         assertNull(Protocol.decodeAction("""{"type":"audio","mime":"audio/wav","data_b64":"UklGRg=="}"""))
+    }
+
+    @Test fun encode_notification() {
+        val ts = Instant.parse("2026-10-25T09:00:00Z")
+        val o = Json.parseToJsonElement(
+            Protocol.encode(Notification("com.wa", "WhatsApp", "Sara", "Family", "message", id = "n1", ts = ts)),
+        ).jsonObject
+        assertEquals("notification", o["type"]!!.jsonPrimitive.content)
+        assertEquals("n1", o["id"]!!.jsonPrimitive.content)
+        assertEquals("2026-10-25T09:00:00Z", o["ts"]!!.jsonPrimitive.content)
+        assertEquals("com.wa", o["package"]!!.jsonPrimitive.content)
+        assertEquals("WhatsApp", o["app"]!!.jsonPrimitive.content)
+        assertEquals("Sara", o["sender"]!!.jsonPrimitive.content)
+        assertEquals("Family", o["group"]!!.jsonPrimitive.content)
+        assertEquals("message", o["kind"]!!.jsonPrimitive.content)
+
+        val n = Json.parseToJsonElement(Protocol.encode(Notification("com.g", "Gmail", "Bob", kind = "email"))).jsonObject
+        assertEquals(JsonNull, n["group"])
+        assertEquals("email", n["kind"]!!.jsonPrimitive.content)
     }
 }

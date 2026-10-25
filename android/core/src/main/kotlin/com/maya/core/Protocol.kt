@@ -86,6 +86,17 @@ data class Charging(
     override val ts: Instant = Instant.now(),
 ) : Event
 
+/** Someone contacted the user: who and where only, never the text. [kind] is message|email|call. */
+data class Notification(
+    val packageName: String,
+    val app: String,
+    val sender: String,
+    val group: String? = null,
+    val kind: String = "message",
+    override val id: String = newId(),
+    override val ts: Instant = Instant.now(),
+) : Event
+
 data class OfflineSummary(
     val events: List<Event>,
     val since: Instant,
@@ -144,6 +155,13 @@ object Protocol {
             }
             is Screen -> put("on", e.on)
             is Charging -> put("on", e.on)
+            is Notification -> {
+                put("package", e.packageName)
+                put("app", e.app)
+                put("sender", e.sender)
+                put("group", e.group)
+                put("kind", e.kind)
+            }
             is OfflineSummary -> {
                 put("events", JsonArray(e.events.map { encodeObject(it) }))
                 put("since", fmt(e.since))
@@ -161,6 +179,7 @@ object Protocol {
         is AppClosed -> "app_closed"
         is Screen -> "screen"
         is Charging -> "charging"
+        is Notification -> "notification"
         is OfflineSummary -> "offline_summary"
     }
 
