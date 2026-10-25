@@ -59,6 +59,7 @@ class VoiceConfig:
     enabled: bool = True
     voice: str = "af_heart"
     speed: float = 1.0
+    pitch: float = 0.0
     model_path: str = "models/kokoro-v1.0.onnx"
     voices_path: str = "models/voices-v1.0.bin"
 

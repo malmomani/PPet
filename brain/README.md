@@ -98,11 +98,23 @@ Voice is on by default once the models are there. If `[voice]` is enabled but th
 ```toml
 [voice]
 enabled = true            # master switch
-voice = "af_heart"        # try af_bella, af_nicole, af_sky
+voice = "af_heart"        # a voice, or a blend: "af_sky:0.6,af_nicole:0.4"
 speed = 1.0
+pitch = 0.0               # semitones; +2 to +4 sounds younger, speed is kept
 model_path = "models/kokoro-v1.0.onnx"    # relative to the folder holding maya.toml
 voices_path = "models/voices-v1.0.bin"
 ```
+
+### Pick Maya's voice
+
+The stock voices are adult; raise the pitch a little and/or blend two voices to find hers. The voice lab renders one line in several voices at pitch +0, +2 and +3.5 into `voice-lab/` (run from `brain/`):
+
+```
+python -m maya_brain.voice_lab --play
+python -m maya_brain.voice_lab --voices af_sky af_nicole "af_sky:0.6,af_nicole:0.4" --pitches 2,3,4 --play
+```
+
+Each file is named after its settings (`af_sky_p+2.wav` = `voice = "af_sky"`, `pitch = 2.0`). Put the winner in `maya.toml` and restart.
 
 The phone decides when she speaks (its voice mode: off, replies or always). Try it in the simulator, where typed lines count as spoken and each reply is saved to `maya-voice-last.wav` (and played on Windows):
 

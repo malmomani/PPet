@@ -11,3 +11,4 @@ android/local.properties
 android/**/.kotlin/
 brain/models/
 maya-voice-last.wav
+brain/voice-lab/

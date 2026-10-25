@@ -28,6 +28,38 @@ class TTSError(Exception):
     pass
 
 
+def parse_voice(spec: str) -> list[tuple[str, float]]:
+    """'af_sky' or 'af_sky:0.6,af_nicole:0.4' -> [(name, weight)]. Raises ValueError on a bad spec."""
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("empty voice")
+    out = []
+    for part in parts:
+        name, _, weight = part.partition(":")
+        name = name.strip()
+        w = float(weight) if weight.strip() else 1.0  # float() raises ValueError on junk
+        if not name or not w > 0:
+            raise ValueError(f"bad voice entry {part!r}")
+        out.append((name, w))
+    return out
+
+
+def pitch_shift(samples, semitones: float):
+    """Raise (or lower) pitch by resampling: n samples become n / 2**(semitones/12).
+
+    Played back at the same rate, the result is higher and shorter by the same factor, so callers
+    render the speech that much slower first to keep the original pace.
+    """
+    if semitones == 0:
+        return samples
+    a = _np.asarray(samples, dtype=_np.float64)
+    if len(a) == 0:
+        return a
+    factor = 2 ** (semitones / 12)
+    n = max(1, int(round(len(a) / factor)))
+    return _np.interp(_np.linspace(0, len(a) - 1, n), _np.arange(len(a)), a)
+
+
 class TTS(Protocol):
     async def synth(self, text: str) -> bytes: ...
 
@@ -104,20 +136,34 @@ class KokoroTTS:
         except Exception as exc:  # synth() retries the load and reports its own error
             print(f"Warning: couldn't load Kokoro yet ({type(exc).__name__}: {exc}).", file=sys.stderr)
 
-    def _synth_blocking(self, text: str) -> bytes:
-        samples, rate = self._load().create(text, voice=self.cfg.voice, speed=self.cfg.speed, lang="en-us")
-        return pcm_wav(samples, rate)
+    def _style(self, kokoro, spec: str):
+        """A single voice name as-is, or the weighted average of several voices' style vectors."""
+        voices = parse_voice(spec)
+        if len(voices) == 1:
+            return voices[0][0]
+        total = sum(w for _, w in voices)
+        return sum(_np.asarray(kokoro.get_voice_style(name)) * w for name, w in voices) / total
 
-    async def synth(self, text: str) -> bytes:
+    def _render_blocking(self, text: str, voice: str, speed: float, pitch: float) -> bytes:
+        kokoro = self._load()
+        factor = 2 ** (pitch / 12)
+        samples, rate = kokoro.create(text, voice=self._style(kokoro, voice), speed=speed / factor, lang="en-us")
+        return pcm_wav(pitch_shift(samples, pitch), rate)
+
+    async def render(self, text: str, voice: str, speed: float, pitch: float) -> bytes:
+        """Synthesize with explicit voice settings (used by synth and the voice lab)."""
         clean = speakable(text)
         if not clean:
             raise TTSError("nothing to say")
         try:
-            return await asyncio.to_thread(self._synth_blocking, clean)
+            return await asyncio.to_thread(self._render_blocking, clean, voice, speed, pitch)
         except TTSError:
             raise
         except Exception as exc:
             raise TTSError(f"kokoro failed: {exc}") from exc
+
+    async def synth(self, text: str) -> bytes:
+        return await self.render(text, self.cfg.voice, self.cfg.speed, self.cfg.pitch)
 
 
 NOT_READY_WARNING = (

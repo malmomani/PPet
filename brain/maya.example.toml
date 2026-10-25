@@ -71,10 +71,13 @@ idle_hours = 6.0
 # [voice]
 # Master switch for speaking replies aloud.
 # enabled = true
-# Kokoro voice name.
+# Kokoro voice name, or a blend of voices with weights: "af_sky:0.6,af_nicole:0.4".
+# Audition candidates with `python -m maya_brain.voice_lab --play`.
 # voice = "af_heart"
 # Speaking speed multiplier.
 # speed = 1.0
+# Pitch shift in semitones (speed is kept): +2 to +4 sounds younger and brighter.
+# pitch = 0.0
 # Paths to the Kokoro model files, relative to the folder holding maya.toml.
 # model_path = "models/kokoro-v1.0.onnx"
 # voices_path = "models/voices-v1.0.bin"
