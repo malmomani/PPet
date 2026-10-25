@@ -60,6 +60,9 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         main.postDelayed(hideRunnable, if (ms > 0) ms else DEFAULT_BUBBLE_MS)
     }
 
+    /** Shows [text] until replaced or hidden (no timeout), e.g. live speech while she listens. */
+    fun hold(text: String) = show(text)
+
     /** `true` shows "…" until replaced; `false` hides the bubble only if it is showing "…". */
     fun typing(on: Boolean) {
         if (on) {

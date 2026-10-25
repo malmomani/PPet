@@ -37,4 +37,7 @@
     <string name="chat_hint">Say something to Maya</string>
     <string name="chat_send">Send</string>
     <string name="bubble_unreachable">zzz… (can\'t reach your PC)</string>
+    <string name="bubble_no_match">…didn\'t catch that 🤔</string>
+    <string name="bubble_mic_failed">I can\'t hear you — check mic permission</string>
+    <string name="bubble_no_recognizer">I can\'t hear you — set up offline English speech in my settings</string>
 </resources>

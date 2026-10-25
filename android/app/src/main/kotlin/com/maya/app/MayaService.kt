@@ -64,6 +64,8 @@ class MayaService : Service() {
     /** The user hid Maya with the notification's Hide action. */
     private var overlayHidden = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    /** Maya is listening to the user (hold to talk). */
+    private var listening = false
 
     override fun onCreate() {
         super.onCreate()
@@ -169,7 +171,7 @@ class MayaService : Service() {
     private fun startOverlay() {
         if (overlayHidden || overlayBody != null || !Settings.canDrawOverlays(this)) return
         val body = try {
-            OverlayBody(this, ::emit)
+            OverlayBody(this, ::emit, ::onListening)
         } catch (e: Exception) {
             Log.w(TAG, "overlay unavailable: ${e.javaClass.simpleName}")
             return
@@ -240,6 +242,10 @@ class MayaService : Service() {
         val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
         val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked ?: false
         return interactive && !locked
+    }
+
+    private fun onListening(on: Boolean) {
+        listening = on
     }
 
     private fun onAction(a: Action) {

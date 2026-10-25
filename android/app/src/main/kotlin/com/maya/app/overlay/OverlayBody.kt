@@ -7,11 +7,14 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
 import android.view.Display
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
@@ -20,6 +23,7 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import com.maya.app.OverlayHook
 import com.maya.app.R
+import com.maya.app.voice.VoiceInput
 import com.maya.core.Action
 import com.maya.core.Animate
 import com.maya.core.Audio
@@ -27,6 +31,7 @@ import com.maya.core.Behavior
 import com.maya.core.ErrorMsg
 import com.maya.core.Event
 import com.maya.core.Gesture
+import com.maya.core.HOLD_TO_TALK_MS
 import com.maya.core.Say
 import com.maya.core.State
 import com.maya.core.Typing
@@ -34,6 +39,7 @@ import com.maya.core.UserDrag
 import com.maya.core.UserMessage
 import com.maya.core.UserTap
 import com.maya.core.classifyGesture
+import com.maya.core.isHoldToTalk
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -44,9 +50,14 @@ private const val TAG = "MayaOverlay"
  * Maya's floating body: a sprite-sized overlay window near the bottom of the screen, moved by a
  * ~30 fps Choreographer loop that drives [Behavior], plus her speech bubble and the chat window.
  * The loop only runs while she is visible and the screen is on and unlocked ([setScreenOn]).
- * Must be created and used on the main thread.
+ * Holding her still for [HOLD_TO_TALK_MS] starts listening ([VoiceInput]); [onListening] reports
+ * when listening starts and ends. Must be created and used on the main thread.
  */
-class OverlayBody(context: Context, private val emit: (Event) -> Unit) : OverlayHook {
+class OverlayBody(
+    context: Context,
+    private val emit: (Event) -> Unit,
+    private val onListening: (Boolean) -> Unit = {},
+) : OverlayHook {
     private val ctx: Context = overlayContext(context)
     private val wm: WindowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val density = ctx.resources.displayMetrics.density
@@ -56,6 +67,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
     private val spriteH = sheet.frameH * scale
     private val touchSlop = ViewConfiguration.get(ctx).scaledTouchSlop
     private val choreographer = Choreographer.getInstance()
+    private val main = Handler(Looper.getMainLooper())
 
     private var screenW = 0
     private var screenH = 0
@@ -70,6 +82,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
     )
     private val bubble = BubbleView(ctx, wm)
     private val chat = ChatWindow(ctx, wm) { text -> emit(UserMessage(text)) }
+    private val voice = VoiceInput(context, VoiceListener())
 
     private var visible = false
     private var destroyed = false
@@ -86,6 +99,17 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
     private var downWinY = 0
     private var dragging = false
     private var throwAnim: ValueAnimator? = null
+    private var downTimeMs = 0L
+    private var lastRawX = 0f
+    private var lastRawY = 0f
+
+    // hold-to-talk state
+    /** The hold timer fired during the current touch: the rest of it is not a tap or a drag. */
+    private var holdFired = false
+    /** A voice session is running (from listening start until its result arrives). */
+    private var listening = false
+    private val holdRunnable = Runnable { onHoldTimer() }
+    private val listenCap = Runnable { if (listening) voice.stop() }
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -117,8 +141,9 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
     override fun handle(a: Action) {
         when (a) {
             is Animate -> behavior.play(a.name)
-            is Say -> if (visible) bubble.say(a.text, a.bubbleMs)
-            is Typing -> if (visible) bubble.typing(a.on)
+            // While listening the bubble shows what she hears; replies come after it.
+            is Say -> if (visible && !listening) bubble.say(a.text, a.bubbleMs)
+            is Typing -> if (visible && !listening) bubble.typing(a.on)
             is State -> Unit // nothing visible in v1
             is Audio -> Unit // played by VoicePlayer (voice Task 7)
             is ErrorMsg -> Unit // the service handles auth errors
@@ -142,6 +167,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
             if (visible) startLoop()
         } else {
             stopLoop()
+            cancelListening()
         }
     }
 
@@ -160,6 +186,9 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
         cancelThrow()
         if (dragging) behavior.dragEnd(params.x.toFloat())
         endTouch()
+        main.removeCallbacks(holdRunnable)
+        holdFired = false
+        cancelListening()
         chat.close()
         bubble.hide()
         if (visible) {
@@ -170,6 +199,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
 
     fun destroy() {
         hide()
+        voice.destroy()
         destroyed = true
     }
 
@@ -217,12 +247,22 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
                 downRawY = event.rawY
                 downWinX = params.x
                 downWinY = params.y
+                downTimeMs = event.downTime
+                lastRawX = event.rawX
+                lastRawY = event.rawY
+                holdFired = false
+                main.removeCallbacks(holdRunnable)
+                main.postDelayed(holdRunnable, HOLD_TO_TALK_MS)
             }
             MotionEvent.ACTION_MOVE -> {
                 track(event)
+                lastRawX = event.rawX
+                lastRawY = event.rawY
+                if (holdFired) return true // she is listening (or tried to): moving does nothing
                 val dx = event.rawX - downRawX
                 val dy = event.rawY - downRawY
                 if (!dragging && hypot(dx, dy) > touchSlop) {
+                    main.removeCallbacks(holdRunnable)
                     dragging = true
                     behavior.dragStart()
                 }
@@ -234,6 +274,13 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
                 }
             }
             MotionEvent.ACTION_UP -> {
+                main.removeCallbacks(holdRunnable)
+                if (holdFired) {
+                    endTouch()
+                    holdFired = false
+                    if (listening) voice.stop() // release sends
+                    return true
+                }
                 track(event)
                 val tracker = velocity
                 var vx = 0f
@@ -264,6 +311,13 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
+                main.removeCallbacks(holdRunnable)
+                if (holdFired) {
+                    endTouch()
+                    holdFired = false
+                    if (listening) voice.stop() // keep what was heard so far
+                    return true
+                }
                 val wasDragging = dragging
                 endTouch()
                 if (wasDragging) behavior.dragEnd(params.x.toFloat())
@@ -298,6 +352,78 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
         }
         val justClosed = SystemClock.uptimeMillis() - chat.lastOutsideCloseMs < TOGGLE_WINDOW_MS
         if (chat.isOpen || justClosed) chat.close() else chat.open()
+    }
+
+    // ---- hold to talk ----
+
+    private fun onHoldTimer() {
+        if (dragging || velocity == null) return // she was picked up, or the finger already left
+        val held = SystemClock.uptimeMillis() - downTimeMs
+        val moved = hypot(lastRawX - downRawX, lastRawY - downRawY)
+        if (!isHoldToTalk(moved, held, touchSlop.toFloat())) return
+        holdFired = true
+        if (listening) return // the previous session is still delivering its result
+        startListening()
+    }
+
+    private fun startListening() {
+        if (!connected) {
+            bubble.say(ctx.getString(R.string.bubble_unreachable), UNREACHABLE_BUBBLE_MS)
+            return
+        }
+        chat.close()
+        spriteView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        listening = true
+        onListening(true) // stops her voice
+        bubble.hold(LISTENING_PREFIX + "…")
+        main.postDelayed(listenCap, MAX_LISTEN_MS)
+        voice.start() // may end the session synchronously (no permission, no recognizer)
+    }
+
+    private fun endListening() {
+        if (!listening) return
+        listening = false
+        main.removeCallbacks(listenCap)
+        onListening(false)
+    }
+
+    /** Drops a running voice session (hidden, screen off): nothing is sent. */
+    private fun cancelListening() {
+        if (!listening) return
+        voice.cancel()
+        endListening()
+        bubble.hide()
+    }
+
+    private inner class VoiceListener : VoiceInput.Listener {
+        override fun onPartial(text: String) {
+            if (listening && visible) bubble.hold(LISTENING_PREFIX + text)
+        }
+
+        override fun onFinal(text: String) {
+            if (!listening) return
+            endListening()
+            if (!connected) {
+                bubble.say(ctx.getString(R.string.bubble_unreachable), UNREACHABLE_BUBBLE_MS)
+                return
+            }
+            emit(UserMessage(text, voice = true))
+            if (visible) bubble.say(LISTENING_PREFIX + text, HEARD_BUBBLE_MS)
+        }
+
+        override fun onNoMatch() {
+            if (!listening) return
+            endListening()
+            if (visible) bubble.say(ctx.getString(R.string.bubble_no_match), VOICE_PROBLEM_BUBBLE_MS)
+        }
+
+        override fun onUnavailable(reason: VoiceInput.Reason) {
+            // BACKGROUND_DENIED is only a notice: VoiceInput carries on through its activity.
+            if (reason == VoiceInput.Reason.BACKGROUND_DENIED || !listening) return
+            endListening()
+            val res = if (reason == VoiceInput.Reason.PERMISSION) R.string.bubble_mic_failed else R.string.bubble_no_recognizer
+            if (visible) bubble.say(ctx.getString(res), VOICE_PROBLEM_BUBBLE_MS)
+        }
     }
 
     private fun throwBody(vx: Float, vy: Float) {
@@ -393,6 +519,10 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
         const val UNREACHABLE_BUBBLE_MS = 3000L
         const val TOGGLE_WINDOW_MS = 500L
         const val LONG_PRESS_MS = 1000L // a stationary press this long is ignored
+        const val LISTENING_PREFIX = "🎤 "
+        const val MAX_LISTEN_MS = 30_000L
+        const val HEARD_BUBBLE_MS = 2500L
+        const val VOICE_PROBLEM_BUBBLE_MS = 4000L
     }
 }
 

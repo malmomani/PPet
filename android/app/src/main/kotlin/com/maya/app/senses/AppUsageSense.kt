@@ -17,7 +17,8 @@ import java.time.Instant
 
 /**
  * Polls UsageStatsManager every 5 s for the foreground app and feeds [AppUsageTracker]. Ignores
- * do-not-watch packages, home screens and Maya herself. Without usage access it emits nothing.
+ * do-not-watch packages and home screens. Maya's own package (settings, the voice activity) is
+ * transparent: it keeps the previous app. Without usage access it emits nothing.
  * Polling pauses while the screen is off (see [setScreenOn]).
  */
 class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sense {
@@ -28,7 +29,10 @@ class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sens
     private val ownPackage: String = ctx.packageName
     private val launchers: Set<String> = findLaunchers()
     private val labels = HashMap<String, String>()
-    private val tracker = AppUsageTracker(isIgnored = { pkg -> isIgnored(pkg) })
+    private val tracker = AppUsageTracker(
+        isIgnored = { pkg -> isIgnored(pkg) },
+        isTransparent = { pkg -> pkg == ownPackage },
+    )
 
     private var emit: ((Event) -> Unit)? = null
     private var started = false
@@ -80,7 +84,7 @@ class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sens
     }
 
     private fun isIgnored(pkg: String): Boolean =
-        doNotWatch.isBlocked(pkg) || pkg in launchers || pkg == ownPackage
+        doNotWatch.isBlocked(pkg) || pkg in launchers
 
     private fun tick() {
         if (!started || !screenOn) return
@@ -88,7 +92,7 @@ class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sens
         val latest = latestResumed(maxOf(now - WINDOW_MS, ignoreBefore), now)
         if (latest != null) foreground = latest
         val pkg = foreground ?: return
-        val label = if (pkg == tracker.current() || isIgnored(pkg)) null else labelOf(pkg)
+        val label = if (pkg == tracker.current() || pkg == ownPackage || isIgnored(pkg)) null else labelOf(pkg)
         deliver(tracker.observe(pkg, label, Instant.now()))
     }
 
