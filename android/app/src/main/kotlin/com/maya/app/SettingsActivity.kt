@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
+import android.speech.SpeechRecognizer
 import android.text.InputType
 import android.util.Log
 import android.view.Gravity
@@ -24,12 +25,17 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
-/** Onboarding + settings: brain address/token, permission checklist, do-not-watch list, start/stop. */
+/**
+ * Onboarding + settings: brain address/token, permission checklist, Maya's voice, do-not-watch
+ * list, start/stop.
+ */
 class SettingsActivity : Activity() {
     private class PermissionRow(
         val label: String,
@@ -44,6 +50,7 @@ class SettingsActivity : Activity() {
     private lateinit var tokenField: EditText
     private lateinit var doNotWatchField: EditText
     private lateinit var toggleButton: Button
+    private lateinit var offlineSpeechRow: LinearLayout
     private val permissionRows = ArrayList<PermissionRow>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,6 +94,26 @@ class SettingsActivity : Activity() {
         addPermissionRow(root, R.string.perm_battery, { ignoresBatteryOptimizations() }) {
             openSettings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
+        addPermissionRow(root, R.string.perm_mic, { hasMic() }) { requestMic() }
+
+        // Maya's voice
+        root.addView(text(getString(R.string.section_voice), 18f, bold = true), matchWrap(top = 20))
+        root.addView(voiceModeGroup(), matchWrap(top = 4))
+        offlineSpeechRow = LinearLayout(this)
+        offlineSpeechRow.orientation = LinearLayout.HORIZONTAL
+        offlineSpeechRow.gravity = Gravity.CENTER_VERTICAL
+        offlineSpeechRow.addView(
+            text("✗  " + getString(R.string.offline_speech_missing), 16f),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        val setupSpeech = Button(this)
+        setupSpeech.setText(R.string.offline_speech_setup)
+        setupSpeech.setOnClickListener { openVoiceInputSettings() }
+        offlineSpeechRow.addView(
+            setupSpeech,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT),
+        )
+        root.addView(offlineSpeechRow, matchWrap(top = 4))
 
         // Do-not-watch list
         root.addView(text(getString(R.string.section_do_not_watch), 18f, bold = true), matchWrap(top = 20))
@@ -131,12 +158,15 @@ class SettingsActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val denied = grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED
         if (requestCode == REQ_NOTIFICATIONS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val denied = grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED
             // Permanently denied: the dialog no longer shows, so send the user to the app's notification settings.
             if (denied && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
                 openNotificationSettings()
             }
+        }
+        if (requestCode == REQ_MIC && denied && !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+            openAppDetails()
         }
         refreshStatus()
     }
@@ -156,6 +186,16 @@ class SettingsActivity : Activity() {
             }
         }
         refreshStatus()
+    }
+
+    private fun onVoiceModeChosen(mode: String) {
+        if (mode == prefs.voiceMode) return
+        prefs.voiceMode = mode
+        // Restart so the brain hears the new mode in the next hello.
+        if (prefs.enabled && prefs.wsUrl() != null) {
+            stopService(Intent(this, MayaService::class.java))
+            startMayaService()
+        }
     }
 
     private fun onToggleClicked() {
@@ -233,6 +273,7 @@ class SettingsActivity : Activity() {
             row.button.visibility = if (ok) View.GONE else View.VISIBLE
         }
         toggleButton.setText(if (prefs.enabled) R.string.stop_maya else R.string.start_maya)
+        offlineSpeechRow.visibility = if (offlineSpeechMissing()) View.VISIBLE else View.GONE
     }
 
     // ---- permission checks ----
@@ -258,6 +299,44 @@ class SettingsActivity : Activity() {
 
     private fun ignoresBatteryOptimizations(): Boolean =
         getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) ?: false
+
+    private fun hasMic(): Boolean =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun requestMic() {
+        if (hasMic()) return
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
+    }
+
+    /** No on-device recognizer (API 33+ can tell): hold-to-talk would need the network or fail. */
+    private fun offlineSpeechMissing(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        return try {
+            !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+        } catch (e: RuntimeException) {
+            false
+        }
+    }
+
+    private fun openVoiceInputSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+        } catch (e: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (e2: ActivityNotFoundException) {
+                // Nothing else to try.
+            }
+        }
+    }
+
+    private fun openAppDetails() {
+        try {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        } catch (e: ActivityNotFoundException) {
+            // Nothing else to try.
+        }
+    }
 
     private fun requestNotifications() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -302,6 +381,28 @@ class SettingsActivity : Activity() {
         )
         parent.addView(row, matchWrap(top = 4))
         permissionRows.add(PermissionRow(getString(labelRes), status, button, granted))
+    }
+
+    /** Off / Only when I talk to her / Always, saved as soon as one is picked. */
+    private fun voiceModeGroup(): RadioGroup {
+        val group = RadioGroup(this)
+        group.orientation = LinearLayout.VERTICAL
+        val choices = listOf(
+            Prefs.VOICE_OFF to R.string.voice_off,
+            Prefs.VOICE_REPLIES to R.string.voice_replies,
+            Prefs.VOICE_ALWAYS to R.string.voice_always,
+        )
+        val current = prefs.voiceMode
+        for ((mode, labelRes) in choices) {
+            val button = RadioButton(this)
+            button.id = View.generateViewId()
+            button.setText(labelRes)
+            button.textSize = 16f
+            group.addView(button)
+            if (mode == current) group.check(button.id)
+            button.setOnCheckedChangeListener { _, checked -> if (checked) onVoiceModeChosen(mode) }
+        }
+        return group
     }
 
     private fun text(value: String, sizeSp: Float, bold: Boolean = false): TextView {
@@ -356,6 +457,7 @@ class SettingsActivity : Activity() {
 
     companion object {
         private const val REQ_NOTIFICATIONS = 1
+        private const val REQ_MIC = 2
         private const val TAG = "SettingsActivity"
     }
 }

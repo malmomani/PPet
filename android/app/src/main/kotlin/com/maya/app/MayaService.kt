@@ -22,10 +22,13 @@ import android.widget.Toast
 import com.maya.app.overlay.OverlayBody
 import com.maya.app.senses.AppUsageSense
 import com.maya.app.senses.DeviceSense
+import com.maya.app.voice.VoicePlayer
 import com.maya.core.Action
 import com.maya.core.AppOpened
+import com.maya.core.Audio
 import com.maya.core.DoNotWatch
 import com.maya.core.Event
+import com.maya.core.Say
 import com.maya.core.Screen
 import com.maya.core.UserMessage
 import com.maya.core.UserShush
@@ -37,6 +40,9 @@ interface OverlayHook {
 
     /** False while the screen is off or locked: the overlay pauses its frame loop. */
     fun setScreenOn(on: Boolean)
+
+    /** One of her spoken replies started playing. */
+    fun onVoiceStarted()
 }
 
 /**
@@ -59,6 +65,7 @@ class MayaService : Service() {
     private var doNotWatch = DoNotWatch(emptySet())
     private var appUsage: AppUsageSense? = null
     private var deviceSense: DeviceSense? = null
+    private var voicePlayer: VoicePlayer? = null
     private var running = false
     private var status = Status.NAPPING
     /** The user hid Maya with the notification's Hide action. */
@@ -84,7 +91,10 @@ class MayaService : Service() {
         }
         if (!running && !startMaya()) return Service.START_NOT_STICKY
         when (intent?.action) {
-            ACTION_SHH -> emit(UserShush())
+            ACTION_SHH -> {
+                voicePlayer?.stop()
+                emit(UserShush())
+            }
             ACTION_HIDE -> toggleHidden()
         }
         // After the actions, so Hide never creates an overlay only to hide it again. No-op if already
@@ -99,6 +109,8 @@ class MayaService : Service() {
         overlayBody?.destroy()
         overlayBody = null
         overlay = null
+        voicePlayer?.release()
+        voicePlayer = null
         stopSenses()
         connection?.stop()
         connection = null
@@ -128,7 +140,8 @@ class MayaService : Service() {
         running = true
         status = Status.NAPPING
         doNotWatch = DoNotWatch(prefs.doNotWatch)
-        val conn = BrainConnection(url, ::onAction, ::onConnected, ::onAuthError, ::screenSize)
+        voicePlayer = VoicePlayer(this) { overlay?.onVoiceStarted() }
+        val conn = BrainConnection(url, prefs.voiceMode, ::onAction, ::onConnected, ::onAuthError, ::screenSize)
         connection = conn
         conn.start()
         startSenses()
@@ -187,6 +200,7 @@ class MayaService : Service() {
     private fun toggleHidden() {
         overlayHidden = !overlayHidden
         updateNotification() // the action now reads Show / Hide
+        if (overlayHidden) voicePlayer?.stop()
         val body = overlayBody ?: return
         if (overlayHidden) body.hide() else body.show()
     }
@@ -244,11 +258,18 @@ class MayaService : Service() {
         return interactive && !locked
     }
 
+    /** Her voice stops the moment the user starts talking. */
     private fun onListening(on: Boolean) {
         listening = on
+        if (on) voicePlayer?.stop()
     }
 
     private fun onAction(a: Action) {
+        when (a) {
+            is Say -> voicePlayer?.onSay(a.id)
+            is Audio -> if (!listening && !overlayHidden) voicePlayer?.play(a.refId, a.dataB64)
+            else -> Unit
+        }
         overlay?.handle(a)
     }
 

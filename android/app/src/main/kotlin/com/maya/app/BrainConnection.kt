@@ -29,6 +29,8 @@ import okhttp3.WebSocketListener
  */
 class BrainConnection(
     private val url: String,
+    /** Sent in `hello`: when the brain should voice her replies (off, replies or always). */
+    private val voiceMode: String,
     private val onAction: (Action) -> Unit,
     private val onConnected: (Boolean) -> Unit,
     private val onAuthError: () -> Unit,
@@ -123,7 +125,7 @@ class BrainConnection(
         connected = true
         backoff.reset()
         val size = screenSize()
-        ws.send(Protocol.encode(Hello(MayaVersion.CLIENT, size.first, size.second)))
+        ws.send(Protocol.encode(Hello(MayaVersion.CLIENT, size.first, size.second, voiceMode)))
         val summary = queue.drainSummary()
         if (summary != null) ws.send(Protocol.encode(summary))
         onConnected(true)

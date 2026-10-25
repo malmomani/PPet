@@ -145,9 +145,14 @@ class OverlayBody(
             is Say -> if (visible && !listening) bubble.say(a.text, a.bubbleMs)
             is Typing -> if (visible && !listening) bubble.typing(a.on)
             is State -> Unit // nothing visible in v1
-            is Audio -> Unit // played by VoicePlayer (voice Task 7)
+            is Audio -> Unit // played by the service's VoicePlayer
             is ErrorMsg -> Unit // the service handles auth errors
         }
+    }
+
+    /** Her voice started playing: a little happy bounce (no lip-sync in v1). */
+    override fun onVoiceStarted() {
+        behavior.play("happy")
     }
 
     override fun setConnected(on: Boolean) {

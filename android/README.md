@@ -62,6 +62,7 @@ New-NetFirewallRule -DisplayName "Maya brain" -Direction Inbound -Protocol TCP -
    - **Usage access (which app is open)**: find Maya, switch it on. This lets her comment on the apps you use.
    - **Notifications**: tap **Allow**.
    - **Ignore battery optimisation**: this opens a list of apps. At the top, switch the filter to **All apps**, find **Maya**, and choose **Don't optimise** (the wording varies on Samsung). The Samsung **Unrestricted** step in section 6 matters most, so do that too.
+   - **Microphone (hold Maya to talk)**: tap **While using the app** (or **Allow**). Only needed if you want to talk to her out loud; see section 7.
 5. Do the Samsung battery steps below, then come back.
 6. Tap **Start Maya**. She should appear on screen. The notification first says "Maya is napping" and changes to "Maya is here" once she's connected to your PC.
 
@@ -76,6 +77,30 @@ Samsung's One UI puts apps to sleep, which stops Maya. Menu names vary a little 
    - Turn off **Put unused apps to sleep** (or add Maya to **Never sleeping apps**).
 2. **Settings** → **Apps** → **Maya** → **Battery** → choose **Unrestricted**.
 
+## 7. Talking to Maya
+
+You can talk to Maya instead of typing, and she can answer out loud.
+
+1. Grant **Microphone** in the app's permission list (section 5).
+2. Press and hold Maya for about half a second, without moving your finger. The phone gives a small buzz and her bubble shows 🎤. Keep holding and speak; the bubble shows what she hears as you go.
+3. Let go when you're done. She gets what you said and answers. (A quick tap still opens the chat box, and dragging or throwing her works as before.)
+
+If she says "…didn't catch that 🤔", hold her again and speak a little louder or closer. Listening stops by itself after 30 seconds.
+
+Your voice never leaves the phone: the phone turns speech into text and only the text goes to your PC.
+
+**Maya's voice.** In the app, under **Maya's voice**, choose when she speaks her replies:
+
+- **Off**: text bubbles only.
+- **Only when I talk to her** (the default): she answers out loud when you spoke to her, and in text when you typed.
+- **Always**: she also speaks her own remarks (about the apps you use and so on).
+
+She stays quiet when the phone is on silent or vibrate, when you tap **Shh** or **Hide**, and the moment you start talking to her. Changing this setting restarts Maya for a second.
+
+**Offline English speech.** Speech recognition works best with the offline English model installed. If the app shows **Offline English speech: not installed**, tap **Set up** next to it. On Samsung the place is usually **Settings** → **General management** → **Keyboard list and default** (or **Voice input**) → pick **Speech Services by Google** (or Samsung's voice input) → **Offline speech recognition** → download **English (US)**. The wording varies between One UI versions; searching Settings for "offline speech" also finds it.
+
+**Her voice comes from your PC.** The PC brain makes the speech audio. Set it up once on the PC as described in the brain guide's [Voice](../brain/README.md#voice) section; without it she answers in text only.
+
 ## Troubleshooting
 
 | What you see | What to do |
@@ -86,6 +111,9 @@ Samsung's One UI puts apps to sleep, which stops Maya. Menu names vary a little 
 | Maya isn't visible | **Draw over other apps** isn't granted, or **Hide** was tapped in the notification. Tap **Hide** again to bring her back, or open the app and check the permissions list. |
 | Maya disappears after a while | Samsung put her to sleep. Redo the battery steps in section 6. |
 | Nothing works after the PC restarts | Start the brain again (step 3). |
+| Holding Maya says "I can't hear you — check mic permission" | Grant **Microphone** in the app (section 5). If it's already granted, check **Settings** → **Apps** → **Maya** → **Permissions** → **Microphone** is allowed, and that the phone's microphone access is on (quick settings panel). |
+| Holding Maya says "set up offline English speech" | No speech recognizer is installed or it lacks English. See **Offline English speech** in section 7. |
+| She answers in text but never out loud | Check **Maya's voice** isn't **Off**, the phone isn't on silent or vibrate, and the PC voice is set up (brain guide, Voice section). |
 
 ## Changing Maya's look (sprites)
 

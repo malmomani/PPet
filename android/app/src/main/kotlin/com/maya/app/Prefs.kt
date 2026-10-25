@@ -30,6 +30,11 @@ class Prefs(context: Context) {
         get() = sp.getStringSet(KEY_DO_NOT_WATCH, null)?.toSet() ?: DEFAULT_DO_NOT_WATCH
         set(value) = sp.edit().putStringSet(KEY_DO_NOT_WATCH, HashSet(value)).apply()
 
+    /** When Maya speaks her replies: "off", "replies" (only to voice messages) or "always". */
+    var voiceMode: String
+        get() = sp.getString(KEY_VOICE_MODE, null)?.takeIf { it in VOICE_MODES } ?: DEFAULT_VOICE_MODE
+        set(value) = sp.edit().putString(KEY_VOICE_MODE, value).apply()
+
     /** The brain's WebSocket URL, or null until both host and token are set. Contains the token: never log it. */
     fun wsUrl(): String? {
         val h = host.trim()
@@ -40,11 +45,17 @@ class Prefs(context: Context) {
 
     companion object {
         const val DEFAULT_PORT = 8765
+        const val VOICE_OFF = "off"
+        const val VOICE_REPLIES = "replies"
+        const val VOICE_ALWAYS = "always"
+        const val DEFAULT_VOICE_MODE = VOICE_REPLIES
+        val VOICE_MODES = listOf(VOICE_OFF, VOICE_REPLIES, VOICE_ALWAYS)
         private const val FILE = "maya"
         private const val KEY_HOST = "host"
         private const val KEY_PORT = "port"
         private const val KEY_TOKEN = "token"
         private const val KEY_ENABLED = "enabled"
         private const val KEY_DO_NOT_WATCH = "do_not_watch"
+        private const val KEY_VOICE_MODE = "voice_mode"
     }
 }
