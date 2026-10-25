@@ -6,6 +6,7 @@ import logging
 import re
 import socket
 import sys
+import threading
 from pathlib import Path
 
 import uvicorn
@@ -73,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Warning: can't reach Ollama at {cfg.llm.base_url} yet ({e}); starting anyway.", file=sys.stderr)
     db = open_db(cfg.db_path)
     tts = load_kokoro(cfg.voice, base_dir=Path(args.config).resolve().parent)
+    if tts is not None:
+        # Load the voice model while the server starts, so her first spoken reply isn't late.
+        threading.Thread(target=tts.warm_up, name="kokoro-warm-up", daemon=True).start()
     mind = Mind(cfg, llm, db, SystemClock(), tts=tts)
     app = create_app(cfg, mind)
 

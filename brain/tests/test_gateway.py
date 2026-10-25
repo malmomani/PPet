@@ -260,6 +260,37 @@ def test_main_resolves_models_next_to_config(tmp_path, monkeypatch):
     assert seen["base_dir"] == tmp_path.resolve()
 
 
+def test_main_warms_up_kokoro_in_the_background(tmp_path, monkeypatch):
+    import threading
+
+    import maya_brain.__main__ as entry
+    from maya_brain.llm import OllamaLLM
+
+    async def no_warm_up(self):
+        return None
+
+    warmed = threading.Event()
+    threads = []
+
+    class Voice:
+        def warm_up(self):
+            threads.append(threading.current_thread())
+            warmed.set()
+
+    seen = {}
+    monkeypatch.setattr(OllamaLLM, "warm_up", no_warm_up)
+    monkeypatch.setattr(entry, "Mind", lambda *a, **kw: seen.update(kw) or object())
+    monkeypatch.setattr(entry, "create_app", lambda cfg, mind: object())
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: None)
+    monkeypatch.setattr(entry, "load_kokoro", lambda cfg, base_dir: Voice())
+    cfg = tmp_path / "m.toml"
+    cfg.write_text(f'db_path = "{tmp_path / "m.db"}"\n[server]\ntoken = "a-long-enough-secret"\n')
+    assert entry.main(["--config", str(cfg)]) == 0
+    assert warmed.wait(5)
+    assert threads[0] is not threading.main_thread()
+    assert isinstance(seen["tts"], Voice)
+
+
 def test_audio_action_reaches_the_phone(clock):
     from maya_brain.tts import FakeTTS
 

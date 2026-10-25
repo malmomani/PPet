@@ -13,6 +13,11 @@ from typing import Protocol
 
 from maya_brain.config import VoiceConfig
 
+try:  # a core dependency, but the encoder below must not need it
+    import numpy as _np
+except ImportError:  # pragma: no cover - exercised by monkeypatching _np in tests
+    _np = None
+
 SAMPLE_RATE = 24000
 _DROP_CATEGORIES = frozenset({"So", "Sk", "Cs", "Co"})
 _DROP_CHARS = frozenset({"️", "︎", "‍"})
@@ -35,18 +40,26 @@ def speakable(text: str) -> str:
     return _WS_RE.sub(" ", kept).strip()
 
 
-def pcm_wav(samples: Sequence[float], rate: int) -> bytes:
-    """Encode float samples (clamped to [-1, 1]) as a mono 16-bit PCM WAV."""
+def _pcm16(samples: Sequence[float]) -> bytes:
+    """Little-endian 16-bit PCM: each sample clamped to [-1, 1], scaled by 32767, truncated toward 0."""
+    if _np is not None:
+        a = _np.asarray(samples, dtype=_np.float64)
+        return (_np.clip(a, -1, 1) * 32767).astype("<i2").tobytes()
     frames = bytearray()
     for s in samples:
-        v = int(round(max(-1.0, min(1.0, float(s))) * 32767))
+        v = int(max(-1.0, min(1.0, float(s))) * 32767)
         frames += v.to_bytes(2, "little", signed=True)
+    return bytes(frames)
+
+
+def pcm_wav(samples: Sequence[float], rate: int) -> bytes:
+    """Encode float samples (clamped to [-1, 1]) as a mono 16-bit PCM WAV."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(rate)
-        w.writeframes(bytes(frames))
+        w.writeframes(_pcm16(samples))
     return buf.getvalue()
 
 
@@ -56,6 +69,8 @@ class KokoroTTS:
         self.base_dir = Path(base_dir)
         self._kokoro = None
         self._load_lock = threading.Lock()
+        # Why `import kokoro_onnx` failed in the last available() check (e.g. "DLL load failed").
+        self.import_error: str | None = None
 
     @property
     def model_file(self) -> Path:
@@ -68,8 +83,10 @@ class KokoroTTS:
     def available(self) -> bool:
         try:
             import kokoro_onnx  # noqa: F401
-        except Exception:  # a broken onnxruntime/numpy install must not crash startup
+        except Exception as exc:  # a broken onnxruntime/numpy install must not crash startup
+            self.import_error = f"{type(exc).__name__}: {exc}"
             return False
+        self.import_error = None
         return self.model_file.is_file() and self.voices_file.is_file()
 
     def _load(self):
@@ -79,6 +96,13 @@ class KokoroTTS:
 
                 self._kokoro = Kokoro(str(self.model_file), str(self.voices_file))
             return self._kokoro
+
+    def warm_up(self) -> None:
+        """Load the model now (blocking), so the first spoken reply isn't late. Never raises."""
+        try:
+            self._load()
+        except Exception as exc:  # synth() retries the load and reports its own error
+            print(f"Warning: couldn't load Kokoro yet ({type(exc).__name__}: {exc}).", file=sys.stderr)
 
     def _synth_blocking(self, text: str) -> bytes:
         samples, rate = self._load().create(text, voice=self.cfg.voice, speed=self.cfg.speed, lang="en-us")
@@ -101,6 +125,17 @@ NOT_READY_WARNING = (
     'To enable it, run: pip install -e ".[voice]" and then: python -m maya_brain.fetch_voice '
     "(a broken onnxruntime install also shows up as unavailable)."
 )
+PYTHON_HINT = (
+    " kokoro-onnx supports Python 3.11-3.13 only and this is Python {version}: make the venv with "
+    "Python 3.13, e.g. `py -3.13 -m venv .venv` on Windows, then reinstall."
+)
+
+
+def python_version_hint(version_info: Sequence[int]) -> str:
+    """Extra advice for the not-ready warning when Python is too new for kokoro-onnx."""
+    if tuple(version_info[:2]) >= (3, 14):
+        return PYTHON_HINT.format(version=f"{version_info[0]}.{version_info[1]}")
+    return ""
 
 
 def load_kokoro(cfg: VoiceConfig, base_dir: Path) -> "KokoroTTS | None":
@@ -110,7 +145,11 @@ def load_kokoro(cfg: VoiceConfig, base_dir: Path) -> "KokoroTTS | None":
     tts = KokoroTTS(cfg, base_dir)
     if tts.available():
         return tts
-    print(NOT_READY_WARNING.format(why=f"looked for {tts.model_file} and {tts.voices_file}"), file=sys.stderr)
+    if tts.import_error is not None:
+        why = f"can't import kokoro_onnx: {tts.import_error}"
+    else:
+        why = f"looked for {tts.model_file} and {tts.voices_file}"
+    print(NOT_READY_WARNING.format(why=why) + python_version_hint(sys.version_info), file=sys.stderr)
     return None
 
 
