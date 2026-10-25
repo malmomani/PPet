@@ -1,10 +1,13 @@
 package com.maya.app.senses
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService.Ranking
+import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.maya.core.NotificationInfo
@@ -20,10 +23,10 @@ import java.time.Instant
 class MayaNotificationListener : NotificationListenerService() {
     private val labels = HashMap<String, String>()
 
-    override fun onNotificationPosted(sbn: StatusBarNotification?) {
+    override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
         if (sbn == null || NotificationBridge.sink == null) return
         val info = try {
-            read(sbn)
+            if (isSilent(sbn, rankingMap)) null else read(sbn)
         } catch (e: Exception) {
             Log.w(TAG, "could not read a notification: ${e.javaClass.simpleName}")
             null
@@ -39,6 +42,10 @@ class MayaNotificationListener : NotificationListenerService() {
         val last = if (messagingStyle) lastMessage(extras) else null
         // The app reposts the conversation after the user replies inline: their own message is last.
         if (last != null && isFromUser(last, extras)) return null
+        // Dedupe on when the content happened, so a later re-post of the same message collapses;
+        // skip restores of old notifications (e.g. after a reboot).
+        val contentTime = listOf(last?.timestamp ?: 0L, n.`when`).firstOrNull { it > 0 } ?: sbn.postTime
+        if (sbn.postTime - contentTime > STALE_MS) return null
         return NotificationInfo(
             packageName = pkg,
             app = labelOf(pkg),
@@ -51,7 +58,7 @@ class MayaNotificationListener : NotificationListenerService() {
             styleSender = last?.senderPerson?.name?.toString(),
             conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString(),
             isGroupConversation = extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false),
-            postedAt = Instant.ofEpochMilli(sbn.postTime),
+            postedAt = Instant.ofEpochMilli(minOf(contentTime, sbn.postTime)),
         )
     }
 
@@ -63,7 +70,8 @@ class MayaNotificationListener : NotificationListenerService() {
     private fun lastMessage(extras: Bundle): Notification.MessagingStyle.Message? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         val bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES) ?: return null
-        return Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles).lastOrNull()
+        val newest = bundles.lastOrNull() ?: return null
+        return Notification.MessagingStyle.Message.getMessagesFromBundleArray(arrayOf(newest)).lastOrNull()
     }
 
     /** A null sender means the user; some apps instead repeat the user's own Person. */
@@ -84,7 +92,17 @@ class MayaNotificationListener : NotificationListenerService() {
         }
     }
 
+    /** Silent (ambient / low importance) notifications aren't someone reaching out. */
+    private fun isSilent(sbn: StatusBarNotification, rankingMap: RankingMap?): Boolean {
+        val ranking = Ranking()
+        if (rankingMap == null || !rankingMap.getRanking(sbn.key, ranking)) return false
+        val importance = ranking.importance
+        return ranking.isAmbient ||
+            (importance != NotificationManager.IMPORTANCE_UNSPECIFIED && importance <= NotificationManager.IMPORTANCE_LOW)
+    }
+
     private companion object {
         const val TAG = "MayaNotifications"
+        const val STALE_MS = 30 * 60 * 1000L
     }
 }
