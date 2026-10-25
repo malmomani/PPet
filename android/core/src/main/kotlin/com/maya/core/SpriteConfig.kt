@@ -7,6 +7,18 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 
+/**
+ * Rows used for animation names a sprite pack may not have yet (the roaming art comes later):
+ * [SpriteConfig.spec] shows the fallback's row instead, and `idle` when that is missing too.
+ */
+val ANIMATION_FALLBACKS: Map<String, String> = mapOf(
+    "jump" to "surprised",
+    "fall" to "surprised",
+    "perch" to "sit",
+    "poke" to "wave",
+    "tease" to "happy",
+)
+
 /** One row of the sprite sheet: which row, how many frames, how fast, and whether it loops. */
 data class AnimSpec(val row: Int, val frames: Int, val fps: Int, val loop: Boolean)
 
@@ -15,8 +27,9 @@ data class SpriteConfig(
     val frameH: Int,
     val animations: Map<String, AnimSpec>,
 ) {
-    /** Spec for [name]; unknown names fall back to `idle`. */
-    fun spec(name: String): AnimSpec = animations[name] ?: animations.getValue("idle")
+    /** Spec for [name]: its own row, else its [ANIMATION_FALLBACKS] row, else `idle`. */
+    fun spec(name: String): AnimSpec =
+        animations[name] ?: ANIMATION_FALLBACKS[name]?.let { animations[it] } ?: animations.getValue("idle")
 }
 
 /**

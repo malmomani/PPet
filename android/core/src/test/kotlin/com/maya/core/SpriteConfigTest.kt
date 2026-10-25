@@ -29,5 +29,20 @@ class SpriteConfigTest {
             "onComplete":"repeat","cells":[{"x":0,"y":0,"w":64,"h":64}]}}}""")
         assertEquals(64, c.frameW); assertEquals(64, c.frameH); assertEquals(AnimSpec(0, 4, 4, true), c.spec("idle"))
     }
-}
 
+    @Test fun fallback_rows() {
+        assertEquals(
+            mapOf("jump" to "surprised", "fall" to "surprised", "perch" to "sit", "poke" to "wave", "tease" to "happy"),
+            ANIMATION_FALLBACKS,
+        )
+        val anim = { row: Int -> """{"row":$row,"frames":4,"fps":4,"loop":true}""" }
+        val c = parseSpriteConfig("""{"frame_w":64,"frame_h":64,"animations":{"idle":${anim(0)},"sit":${anim(2)},""" +
+            """"wave":${anim(4)},"surprised":${anim(8)},"jump":${anim(9)}}}""")
+        assertEquals(9, c.spec("jump").row) // its own row wins
+        assertEquals(8, c.spec("fall").row)
+        assertEquals(2, c.spec("perch").row)
+        assertEquals(4, c.spec("poke").row)
+        assertEquals(0, c.spec("tease").row) // fallback (happy) missing too: idle
+        assertEquals(0, c.spec("moonwalk").row)
+    }
+}

@@ -97,7 +97,10 @@ class BehaviorTest {
         val dur = (400 + 500 * dist / hypot(W.toFloat(), H.toFloat())).toInt().coerceIn(400, 900)
         var minFeet = Float.MAX_VALUE
         var t = 0
-        while (t < dur - 10) { b.tick(1); t += 1; minFeet = minOf(minFeet, b.state.feetY) }
+        while (t < dur - 10) {
+            b.tick(1); t += 1; minFeet = minOf(minFeet, b.state.feetY)
+            assertTrue("sprite above the screen", b.y >= 0f)
+        }
         assertEquals("jump", b.state.doing)
         assertEquals(1400f - 0.25f * dist, minFeet, 2f) // apex 0.25 × distance above the higher end
         b.tick(10)
@@ -106,7 +109,7 @@ class BehaviorTest {
         assertTrue(s.grounded); assertEquals("platform", s.where); assertEquals("idle", b.animation)
     }
 
-    @Test fun jump_duration_is_clamped_to_400_900ms() {
+    @Test fun jump_duration_scales_with_distance() {
         val b = mk()
         val near = Platform(880, 1000, 1990)
         b.setLayout(Layout(listOf(near), emptyList()))
@@ -121,6 +124,70 @@ class BehaviorTest {
         assertTrue(far.jumpTo(top))
         far.tick(630); assertEquals("jump", far.state.doing)
         far.tick(20); assertTrue(far.state.grounded)
+    }
+
+    @Test fun jump_apex_keeps_the_sprite_on_screen() {
+        val b = mk()
+        val top = Platform(600, 900, 150)
+        b.setLayout(Layout(listOf(Platform(0, 300, 1000), top), emptyList()))
+        b.putFeet(150f, 1000f) // rise 850: an unclamped apex would put the sprite ~190 px above the screen
+        assertTrue(b.jumpTo(top))
+        var minY = Float.MAX_VALUE
+        while (!b.state.grounded) {
+            b.tick(5)
+            assertTrue("sprite above the screen: ${b.y}", b.y >= 0f)
+            minY = minOf(minY, b.y)
+        }
+        assertEquals(0f, minY, 2f) // the arc tops out with the sprite at the screen top
+        assertEquals(150f, b.state.feetY)
+    }
+
+    @Test fun drag_mid_jump() {
+        val b = mk()
+        val p = Platform(300, 700, 1400)
+        b.setLayout(Layout(listOf(p), emptyList()))
+        b.putFeet(150f, H.toFloat())
+        assertTrue(b.jumpTo(p)); b.tick(100)
+        b.dragStart()
+        assertEquals("dragged", b.state.doing); assertEquals("surprised", b.animation)
+        val x0 = b.x; val y0 = b.y
+        b.tick(500); assertEquals(x0, b.x); assertEquals(y0, b.y)
+        b.dragEnd(x0, y0)
+        assertEquals("fall", b.state.doing)
+        b.settle(); assertEquals("floor", b.state.where); assertEquals("idle", b.animation)
+    }
+
+    @Test fun restricted_mid_jump_falls() {
+        val b = mk()
+        val p = Platform(300, 700, 1400)
+        b.setLayout(Layout(listOf(p), emptyList()))
+        b.putFeet(150f, H.toFloat())
+        assertTrue(b.jumpTo(p)); b.tick(100)
+        b.setRestricted(true)
+        assertEquals("fall", b.state.doing)
+        b.settle(); assertEquals("floor", b.state.where); assertEquals(H.toFloat(), b.state.feetY)
+    }
+
+    @Test fun layout_during_a_fall_catches_her() {
+        val b = mk()
+        b.putFeet(500f, 100f)
+        b.tick(100); assertEquals("fall", b.state.doing)
+        b.setLayout(Layout(listOf(Platform(0, 1000, 1000)), emptyList()))
+        b.settle()
+        assertEquals(1000f, b.state.feetY); assertEquals("platform", b.state.where)
+    }
+
+    @Test fun disconnected_mid_jump_finishes_then_naps() {
+        val b = mk()
+        val p = Platform(300, 700, 1400)
+        b.setLayout(Layout(listOf(p), emptyList()))
+        b.putFeet(150f, H.toFloat())
+        assertTrue(b.jumpTo(p)); b.tick(100)
+        b.setConnected(false)
+        assertEquals("jump", b.state.doing); assertEquals("jump", b.animation)
+        b.tick(1000)
+        assertTrue(b.state.grounded); assertEquals(1400f, b.state.feetY)
+        assertEquals("nap", b.animation); assertEquals("nap", b.state.doing)
     }
 
     @Test fun jump_reach_limits() {
@@ -306,6 +373,8 @@ class BehaviorTest {
         assertEquals(0.10, rate("curious", "stranger"), 0.05)
         assertEquals(0.10, rate("sleepy", "close"), 0.05)
         assertEquals(0.10, rate("sulky", "friend"), 0.05)
+        assertEquals(0.10, rate("excited", "stranger"), 0.05) // strangers stay mostly on the floor
+        assertEquals(0.10, rate("happy", "stranger"), 0.05)
         assertEquals(0.25, rate("curious", "friend"), 0.05)
         assertEquals(0.40, rate("bored", "close"), 0.05)
         assertEquals(0.35, rate("happy", "friend"), 0.05)
