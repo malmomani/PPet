@@ -63,9 +63,9 @@ class OverlayBody(
     private val ctx: Context = overlayContext(context)
     private val wm: WindowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val density = ctx.resources.displayMetrics.density
+    private val sheet = SpriteSheet(ctx.assets)
     // Integer nearest-neighbour scale so a frame is about SPRITE_DP tall (64 px art -> x3 at density 3).
     private val scale = (SPRITE_DP * density / sheet.frameH).roundToInt().coerceAtLeast(1)
-    private val sheet = SpriteSheet(ctx.assets)
     private val spriteSize = sheet.frameW * scale
     private val spriteH = sheet.frameH * scale
     private val touchSlop = ViewConfiguration.get(ctx).scaledTouchSlop
