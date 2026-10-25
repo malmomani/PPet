@@ -12,6 +12,7 @@ import com.maya.core.ErrorMsg
 import com.maya.core.Event
 import com.maya.core.Hello
 import com.maya.core.MayaVersion
+import com.maya.core.Notification
 import com.maya.core.OfflineQueue
 import com.maya.core.Protocol
 import com.maya.core.Screen
@@ -88,7 +89,7 @@ class BrainConnection(
         connect() // also removes the pending retry
     }
 
-    /** Sends now when connected; otherwise queues sense events (app/screen/charging) and drops user events. */
+    /** Sends now when connected; otherwise queues sense events (app/screen/charging/notification) and drops user events. */
     fun send(e: Event) {
         if (!onMain()) {
             main.post { send(e) }
@@ -96,7 +97,7 @@ class BrainConnection(
         }
         val ws = socket
         if (connected && ws != null && ws.send(Protocol.encode(e))) return
-        if (e is AppOpened || e is AppClosed || e is Screen || e is Charging) queue.add(e)
+        if (e is AppOpened || e is AppClosed || e is Screen || e is Charging || e is Notification) queue.add(e)
     }
 
     private fun connect() {

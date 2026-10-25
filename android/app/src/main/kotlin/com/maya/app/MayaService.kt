@@ -22,12 +22,15 @@ import android.widget.Toast
 import com.maya.app.overlay.OverlayBody
 import com.maya.app.senses.AppUsageSense
 import com.maya.app.senses.DeviceSense
+import com.maya.app.senses.NotificationBridge
 import com.maya.app.voice.VoicePlayer
 import com.maya.core.Action
 import com.maya.core.AppOpened
 import com.maya.core.Audio
 import com.maya.core.DoNotWatch
 import com.maya.core.Event
+import com.maya.core.NotificationFilter
+import com.maya.core.NotificationInfo
 import com.maya.core.Say
 import com.maya.core.Screen
 import com.maya.core.UserMessage
@@ -68,6 +71,8 @@ class MayaService : Service() {
     private var doNotWatch = DoNotWatch(emptySet())
     private var appUsage: AppUsageSense? = null
     private var deviceSense: DeviceSense? = null
+    /** Our [NotificationBridge.sink] (it owns this run's NotificationFilter); null while the sense is off. */
+    private var notificationSink: ((NotificationInfo) -> Unit)? = null
     private var voicePlayer: VoicePlayer? = null
     private var running = false
     private var status = Status.NAPPING
@@ -228,6 +233,13 @@ class MayaService : Service() {
         val device = DeviceSense(this)
         deviceSense = device
         device.start(::onDeviceEvent)
+        if (prefs.seeNotifications) {
+            // The listener (Notification access) hands notifications over on the main thread.
+            val filter = NotificationFilter(doNotWatch::isBlocked, packageName)
+            val sink: (NotificationInfo) -> Unit = { info -> filter.accept(info)?.let { emit(it) } }
+            notificationSink = sink
+            NotificationBridge.sink = sink
+        }
     }
 
     private fun stopSenses() {
@@ -235,6 +247,9 @@ class MayaService : Service() {
         appUsage = null
         deviceSense?.stop()
         deviceSense = null
+        // Only clear our own sink, never one a newer service instance already set.
+        if (NotificationBridge.sink === notificationSink) NotificationBridge.sink = null
+        notificationSink = null
     }
 
     /**

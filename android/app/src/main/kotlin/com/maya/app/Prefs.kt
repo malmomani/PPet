@@ -35,6 +35,11 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_VOICE_MODE, null)?.takeIf { it in VOICE_MODES } ?: DEFAULT_VOICE_MODE
         set(value) = sp.edit().putString(KEY_VOICE_MODE, value).apply()
 
+    /** "Let Maya see who messages me": app + sender names from notifications, never the text. */
+    var seeNotifications: Boolean
+        get() = sp.getBoolean(KEY_SEE_NOTIFICATIONS, true)
+        set(value) = sp.edit().putBoolean(KEY_SEE_NOTIFICATIONS, value).apply()
+
     /** The brain's WebSocket URL, or null until both host and token are set. Contains the token: never log it. */
     fun wsUrl(): String? {
         val h = host.trim()
@@ -57,5 +62,6 @@ class Prefs(context: Context) {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_DO_NOT_WATCH = "do_not_watch"
         private const val KEY_VOICE_MODE = "voice_mode"
+        private const val KEY_SEE_NOTIFICATIONS = "see_notifications"
     }
 }

@@ -63,6 +63,7 @@ New-NetFirewallRule -DisplayName "Maya brain" -Direction Inbound -Protocol TCP -
    - **Notifications**: tap **Allow**.
    - **Ignore battery optimisation**: this opens a list of apps. At the top, switch the filter to **All apps**, find **Maya**, and choose **Don't optimise** (the wording varies on Samsung). The Samsung **Unrestricted** step in section 6 matters most, so do that too.
    - **Microphone (hold Maya to talk)**: tap **While using the app** (or **Allow**). Only needed if you want to talk to her out loud; see section 7.
+   - **Notification access (who messages you)**: find Maya, switch it on. Optional; see section 8.
 5. Do the Samsung battery steps below, then come back.
 6. Tap **Start Maya**. She should appear on screen. The notification first says "Maya is napping" and changes to "Maya is here" once she's connected to your PC.
 
@@ -101,6 +102,15 @@ She stays quiet when the phone is on silent or vibrate, when you tap **Shh** or 
 
 **Her voice comes from your PC.** The PC brain makes the speech audio. Set it up once on the PC as described in the brain guide's [Voice](../brain/README.md#voice) section; without it she answers in text only.
 
+## 8. Let Maya see who messages you
+
+Maya can notice when someone messages you (WhatsApp, SMS, Telegram, email, a missed call) and may comment on it now and then. She never announces every message.
+
+1. In the app, under **Permissions**, tap **Grant** next to **Notification access (who messages you)**, find **Maya** and switch it on. If Android says it's a **restricted setting** (common for apps installed from an APK), go to **Settings** → **Apps** → **Maya**, tap **⋮** (top right) → **Allow restricted settings**, then try again.
+2. Make sure **Let Maya see who messages me** (under **Messages**) is on. It is on by default; switch it off to stop this completely (Maya restarts for a second).
+
+**Privacy.** Only the app name and the sender's name (and the group name for group chats) go to your PC. The message text is never read, not even on the phone. Apps in the **Never watch these apps** list (and anything with "bank" in its package name) are ignored.
+
 ## Troubleshooting
 
 | What you see | What to do |
@@ -108,6 +118,7 @@ She stays quiet when the phone is on silent or vibrate, when you tap **Shh** or 
 | Notification says "Maya is napping (can't reach your PC)", or a bubble says "zzz…" | The phone can't reach the PC. Check: both on the same Wi-Fi? The brain window still running? The firewall rule from step 4 added, and Wi-Fi set to Private? The PC address correct (it can change; run `ipconfig` again)? Quick test: open `http://<PC address>:8765/health` in the phone's browser. If that page doesn't load, it's the network or firewall, not the app. |
 | "Check the token in settings" | The token doesn't match `maya.toml`. Re-copy it exactly (no spaces), tap **Save**. |
 | Maya doesn't comment on apps | **Usage access** is missing. In the app, tap **Grant** next to it and switch it on for Maya. |
+| Maya never mentions messages | Check **Notification access** has a tick (✓) and **Let Maya see who messages me** is on. If the switch for Maya in Android's notification access list is greyed out, allow restricted settings (section 8). |
 | Maya isn't visible | **Draw over other apps** isn't granted, or **Hide** was tapped in the notification. Tap **Hide** again to bring her back, or open the app and check the permissions list. |
 | Maya disappears after a while | Samsung put her to sleep. Redo the battery steps in section 6. |
 | Nothing works after the PC restarts | Start the brain again (step 3). |

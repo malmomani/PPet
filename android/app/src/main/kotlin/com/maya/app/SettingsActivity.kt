@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
@@ -28,15 +29,17 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.maya.app.senses.MayaNotificationListener
 import com.maya.app.voice.OfflineSpeech
 import com.maya.app.voice.OfflineSpeechStatus
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
- * Onboarding + settings: brain address/token, permission checklist, Maya's voice, do-not-watch
- * list, start/stop.
+ * Onboarding + settings: brain address/token, permission checklist, Maya's voice, messages,
+ * do-not-watch list, start/stop.
  */
 class SettingsActivity : Activity() {
     private class PermissionRow(
@@ -104,6 +107,9 @@ class SettingsActivity : Activity() {
             openSettings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
         addPermissionRow(root, R.string.perm_mic, { hasMic() }) { requestMic() }
+        addPermissionRow(root, R.string.perm_notification_access, { hasNotificationAccess() }) {
+            openSettings(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
 
         // Maya's voice
         root.addView(text(getString(R.string.section_voice), 18f, bold = true), matchWrap(top = 20))
@@ -123,6 +129,16 @@ class SettingsActivity : Activity() {
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT),
         )
         root.addView(offlineSpeechRow, matchWrap(top = 4))
+
+        // Messages (notification access)
+        root.addView(text(getString(R.string.section_messages), 18f, bold = true), matchWrap(top = 20))
+        val seeNotifications = Switch(this)
+        seeNotifications.setText(R.string.see_notifications)
+        seeNotifications.textSize = 16f
+        seeNotifications.isChecked = prefs.seeNotifications
+        seeNotifications.setOnCheckedChangeListener { _, checked -> onSeeNotificationsChanged(checked) }
+        root.addView(seeNotifications, matchWrap(top = 4))
+        root.addView(text(getString(R.string.see_notifications_note), 14f), matchWrap(top = 2))
 
         // Do-not-watch list
         root.addView(text(getString(R.string.section_do_not_watch), 18f, bold = true), matchWrap(top = 20))
@@ -207,11 +223,13 @@ class SettingsActivity : Activity() {
     private fun onVoiceModeChosen(mode: String) {
         if (mode == prefs.voiceMode) return
         prefs.voiceMode = mode
-        // Restart so the brain hears the new mode in the next hello.
-        if (prefs.enabled && prefs.wsUrl() != null) {
-            stopService(Intent(this, MayaService::class.java))
-            startMayaService()
-        }
+        restartMayaService() // so the brain hears the new mode in the next hello
+    }
+
+    private fun onSeeNotificationsChanged(on: Boolean) {
+        if (on == prefs.seeNotifications) return
+        prefs.seeNotifications = on
+        restartMayaService() // so the service starts or stops listening
     }
 
     private fun onToggleClicked() {
@@ -228,6 +246,14 @@ class SettingsActivity : Activity() {
             startMayaService()
         }
         refreshStatus()
+    }
+
+    /** Restarts a running Maya so the service picks up a changed setting. No-op when she is off. */
+    private fun restartMayaService() {
+        if (prefs.enabled && prefs.wsUrl() != null) {
+            stopService(Intent(this, MayaService::class.java))
+            startMayaService()
+        }
     }
 
     private fun startMayaService() {
@@ -316,6 +342,17 @@ class SettingsActivity : Activity() {
 
     private fun ignoresBatteryOptimizations(): Boolean =
         getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) ?: false
+
+    /** Notification access: our listener is in the system's enabled list. */
+    private fun hasNotificationAccess(): Boolean {
+        val component = ComponentName(this, MayaNotificationListener::class.java)
+        return try {
+            Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+                ?.contains(component.flattenToString()) == true
+        } catch (e: SecurityException) {
+            getSystemService(NotificationManager::class.java)?.isNotificationListenerAccessGranted(component) ?: false
+        }
+    }
 
     private fun hasMic(): Boolean =
         checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
