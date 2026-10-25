@@ -30,6 +30,7 @@ ANIMATIONS: tuple[str, ...] = (
 
 
 VOICE_MODES: tuple[str, ...] = ("off", "replies", "always")
+NOTIFICATION_KINDS: tuple[str, ...] = ("message", "email", "call")
 
 
 def _new_id() -> str:
@@ -103,6 +104,22 @@ class Charging(_Message):
     on: bool
 
 
+class NotificationEvent(_Message):
+    """Someone contacted the user: who and where only, never the text."""
+
+    type: Literal["notification"] = "notification"
+    package: str
+    app: str = Field(min_length=1, max_length=100)
+    sender: str = Field(min_length=1, max_length=100)
+    group: str | None = Field(default=None, max_length=100)
+    kind: Literal["message", "email", "call"] = "message"
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _known_kind(cls, v: object) -> object:
+        return v if isinstance(v, str) and v in NOTIFICATION_KINDS else "message"
+
+
 class OfflineSummary(_Message):
     type: Literal["offline_summary"] = "offline_summary"
     events: list[dict]
@@ -119,6 +136,7 @@ Event = Annotated[
     | AppClosed
     | Screen
     | Charging
+    | NotificationEvent
     | OfflineSummary,
     Field(discriminator="type"),
 ]
@@ -135,6 +153,7 @@ _EVENT_TYPES = frozenset(
         "app_closed",
         "screen",
         "charging",
+        "notification",
         "offline_summary",
     }
 )

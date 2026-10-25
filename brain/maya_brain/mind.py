@@ -21,6 +21,7 @@ from .protocol import (
     Audio,
     Event,
     Hello,
+    NotificationEvent,
     OfflineSummary,
     ProtocolError,
     Say,
@@ -66,6 +67,16 @@ def _fmt_use(seconds: int) -> str:
 def _fmt_away(seconds: int) -> str:
     minutes = seconds // 60
     return f"{minutes}m" if minutes < 60 else _hours_minutes(minutes)
+
+
+def _notification_line(event: NotificationEvent) -> str:
+    if event.kind == "email":
+        return f"{event.sender} emailed ({event.app})"
+    if event.kind == "call":
+        return f"missed call from {event.sender} ({event.app})"
+    if event.group:
+        return f"{event.sender} in {event.group} on {event.app}"
+    return f"{event.sender} messaged on {event.app}"
 
 
 class Mind:
@@ -154,6 +165,8 @@ class Mind:
             elif isinstance(event, AppClosed):
                 if event.duration_s >= MIN_APP_USE_S:
                     self.memory.add_turn("event", f"User used {event.label} for {_fmt_use(event.duration_s)}")
+            elif isinstance(event, NotificationEvent):
+                self.memory.add_turn("event", _notification_line(event))
             elif isinstance(event, OfflineSummary):
                 self._on_offline_summary(event)
             await self._maybe_initiate()
@@ -187,6 +200,7 @@ class Mind:
 
     def _on_offline_summary(self, event: OfflineSummary) -> None:
         totals: dict[str, int] = {}  # insertion order = first-seen label order
+        contacts: dict[tuple[str, str], int] = {}  # (sender, app) -> notification count, first-seen order
         for raw in event.events:
             try:
                 inner = parse_event(raw)
@@ -194,9 +208,18 @@ class Mind:
                 continue
             if isinstance(inner, AppClosed):
                 totals[inner.label] = totals.get(inner.label, 0) + inner.duration_s
+            elif isinstance(inner, NotificationEvent):
+                key = (inner.sender, inner.app)
+                contacts[key] = contacts.get(key, 0) + 1
         parts = [f"{label} {_fmt_away(s)}" for label, s in totals.items() if s >= 60]
+        line = "While you were disconnected"
         if parts:
-            self.memory.add_turn("event", "While you were disconnected the user used: " + ", ".join(parts))
+            line += " the user used: " + ", ".join(parts)
+        if contacts:
+            messages = "messages: " + ", ".join(f"{n} from {sender} ({app})" for (sender, app), n in contacts.items())
+            line += "; " + messages if parts else " the user got " + messages
+        if parts or contacts:
+            self.memory.add_turn("event", line)
 
     # ---- thinking ----
 

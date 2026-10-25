@@ -67,6 +67,7 @@ Type plain text to talk to Maya. Slash commands inject events on a virtual clock
 | --- | --- |
 | `/tap`, `/throw`, `/shush` | Tap, throw, or ask Maya to be quiet for a while |
 | `/app <Label>`, `/close` | Open an app (e.g. `/app TikTok`); close it and report how long it was open |
+| `/notify <sender> [app] [group]` | Pretend someone messaged the user (app defaults to WhatsApp); Maya sees who, never the text |
 | `/screen on\|off`, `/charge on\|off` | Screen and charger events |
 | `/time HH:MM` | Jump the virtual clock forward to the next HH:MM (today or tomorrow) |
 | `/skip 90m\|3h\|2d` | Advance the clock, letting Maya's periodic thinking run along the way |

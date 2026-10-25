@@ -11,6 +11,7 @@ from .protocol import (
     AppOpened,
     Charging,
     Hello,
+    NotificationEvent,
     Screen,
     UserDrag,
     UserMessage,
@@ -33,8 +34,10 @@ CHARGING_BUMP = 3.0
 RETURN_BUMP = 30.0
 LATE_NIGHT_BUMP = 10.0
 LONG_SESSION_BUMP = 15.0
+NOTIFICATION_BUMP = 8.0
+NOTIFICATION_GAP = timedelta(seconds=600)  # per sender
 
-# Events that mean the user is actually around. Hello, Charging and OfflineSummary are not.
+# Events that mean the user is actually around. Hello, Charging, NotificationEvent and OfflineSummary are not.
 USER_ACTIVITY = (AppOpened, AppClosed, Screen, UserMessage, UserTap, UserDrag, UserShush)
 
 
@@ -52,6 +55,14 @@ def in_window(t: time, start: time, end: time) -> bool:
 
 def _dt(value: str | None) -> datetime | None:
     return None if value is None else datetime.fromisoformat(value)
+
+
+def _notification_reason(event: NotificationEvent) -> str:
+    if event.kind == "email":
+        return f"{event.sender} just emailed ({event.app})"
+    if event.kind == "call":
+        return f"missed call from {event.sender} ({event.app})"
+    return f"{event.sender} just messaged on {event.app}"
 
 
 class Initiative:
@@ -75,6 +86,7 @@ class Initiative:
         self._night_count: int = s.get("night_count", 0)
         self._late_pending: bool = s.get("late_pending", False)
         self._late_hour: str | None = s.get("late_hour")
+        self._notified: dict[str, str] = s.get("notified", {})  # sender -> when they last bumped the urge
 
     # ---- persistence ----
 
@@ -96,6 +108,7 @@ class Initiative:
                 "night_count": self._night_count,
                 "late_pending": self._late_pending,
                 "late_hour": self._late_hour,
+                "notified": self._notified,
             },
         )
 
@@ -157,6 +170,11 @@ class Initiative:
             self._session_bumped = False
         elif isinstance(event, Charging) and event.on:
             bumps.append((CHARGING_BUMP, None))
+        elif isinstance(event, NotificationEvent):
+            self._notified = {k: v for k, v in self._notified.items() if now - datetime.fromisoformat(v) < NOTIFICATION_GAP}
+            if event.sender not in self._notified:
+                self._notified[event.sender] = now.isoformat()
+                bumps.append((NOTIFICATION_BUMP, _notification_reason(event)))
 
         if not in_window(now.time(), LATE_NIGHT_START, LATE_NIGHT_END):
             self._late_pending = False  # a stale trigger from an earlier night must not linger

@@ -29,6 +29,7 @@ from .protocol import (
     Error,
     Event,
     Hello,
+    NotificationEvent,
     Say,
     Screen,
     State,
@@ -52,6 +53,7 @@ HELP = """Commands:
   /shush            ask Maya to be quiet for a while
   /app <Label>      open an app (e.g. /app TikTok)
   /close            close the current app (reports how long it was open)
+  /notify <sender> [app] [group]  someone messaged the user (app defaults to WhatsApp)
   /screen on|off    turn the phone screen on or off
   /charge on|off    plug in or unplug the charger
   /time HH:MM       jump the virtual clock forward to the next HH:MM (today or tomorrow)
@@ -96,6 +98,12 @@ def parse_command(line: str, now: datetime, voice: bool = False) -> tuple[str, o
         if not arg:
             return help_
         return "event", AppOpened(package=arg.lower(), label=arg)
+    if cmd == "notify":
+        sender, app, group = (arg.split(None, 2) + [None, None, None])[:3]
+        if not sender:
+            return help_
+        app = app or "WhatsApp"
+        return "event", NotificationEvent(package=app.lower(), app=app[:100], sender=sender[:100], group=group and group[:100])
     if cmd == "close":
         return "close", None
     if cmd in ("screen", "charge"):
