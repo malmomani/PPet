@@ -22,6 +22,7 @@ import com.maya.app.OverlayHook
 import com.maya.app.R
 import com.maya.core.Action
 import com.maya.core.Animate
+import com.maya.core.Audio
 import com.maya.core.Behavior
 import com.maya.core.ErrorMsg
 import com.maya.core.Event
@@ -119,6 +120,7 @@ class OverlayBody(context: Context, private val emit: (Event) -> Unit) : Overlay
             is Say -> if (visible) bubble.say(a.text, a.bubbleMs)
             is Typing -> if (visible) bubble.typing(a.on)
             is State -> Unit // nothing visible in v1
+            is Audio -> Unit // played by VoicePlayer (voice Task 7)
             is ErrorMsg -> Unit // the service handles auth errors
         }
     }
