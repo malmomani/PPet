@@ -9,3 +9,5 @@ android/core/.gradle/
 android/local.properties
 *.apk
 android/**/.kotlin/
+brain/models/
+maya-voice-last.wav

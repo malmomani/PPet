@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator
 
 MOODS: tuple[str, ...] = (
     "happy",
@@ -29,6 +29,9 @@ ANIMATIONS: tuple[str, ...] = (
 )
 
 
+VOICE_MODES: tuple[str, ...] = ("off", "replies", "always")
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex
 
@@ -50,11 +53,18 @@ class Hello(_Message):
     client_version: str
     screen_w: int
     screen_h: int
+    voice_mode: Literal["off", "replies", "always"] = "off"
+
+    @field_validator("voice_mode", mode="before")
+    @classmethod
+    def _known_voice_mode(cls, v: object) -> object:
+        return v if isinstance(v, str) and v in VOICE_MODES else "off"
 
 
 class UserMessage(_Message):
     type: Literal["user_message"] = "user_message"
     text: str = Field(min_length=1, max_length=2000)
+    voice: bool = False
 
 
 class UserTap(_Message):
@@ -177,6 +187,13 @@ class Typing(_Message):
     on: bool
 
 
+class Audio(_Message):
+    type: Literal["audio"] = "audio"
+    ref_id: str
+    mime: str = "audio/wav"
+    data_b64: str
+
+
 class Error(_Message):
     type: Literal["error"] = "error"
     code: str
@@ -184,6 +201,6 @@ class Error(_Message):
 
 
 Action = Annotated[
-    Say | Animate | State | Typing | Error,
+    Say | Animate | State | Typing | Audio | Error,
     Field(discriminator="type"),
 ]

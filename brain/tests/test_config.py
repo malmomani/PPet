@@ -25,3 +25,13 @@ def test_partial_override_and_unknown_keys(tmp_path):
 def test_example_config_loads():
     cfg = load_config(Path(__file__).parent.parent / "maya.example.toml")
     assert cfg.persona.name == "Maya"
+
+
+def test_voice_config_defaults_and_override(tmp_path):
+    c0 = load_config(None).voice
+    assert c0.enabled is True and c0.voice == "af_heart" and c0.speed == 1.0
+    assert c0.model_path == "models/kokoro-v1.0.onnx" and c0.voices_path == "models/voices-v1.0.bin"
+    p = tmp_path / "m.toml"
+    p.write_text('[voice]\nenabled=false\nvoice="af_bella"\n')
+    c = load_config(p).voice
+    assert c.enabled is False and c.voice == "af_bella" and c.speed == 1.0

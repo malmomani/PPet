@@ -55,12 +55,22 @@ class ReflectionConfig:
 
 
 @dataclass
+class VoiceConfig:
+    enabled: bool = True
+    voice: str = "af_heart"
+    speed: float = 1.0
+    model_path: str = "models/kokoro-v1.0.onnx"
+    voices_path: str = "models/voices-v1.0.bin"
+
+
+@dataclass
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     persona: PersonaConfig = field(default_factory=PersonaConfig)
     initiative: InitiativeConfig = field(default_factory=InitiativeConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     db_path: str = "maya.db"
 
 

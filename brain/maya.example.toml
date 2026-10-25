@@ -64,3 +64,16 @@ shush_min = 60
 time = "04:00"
 # Hours of idleness after which reflection may run early.
 idle_hours = 6.0
+
+# Voice (optional). Install with `pip install -e ".[voice]"` and fetch the models with
+# `python -m maya_brain.fetch_voice`. Without them she simply stays text-only.
+# [voice]
+# Master switch for speaking replies aloud.
+# enabled = true
+# Kokoro voice name.
+# voice = "af_heart"
+# Speaking speed multiplier.
+# speed = 1.0
+# Paths to the Kokoro model files (relative to the brain directory).
+# model_path = "models/kokoro-v1.0.onnx"
+# voices_path = "models/voices-v1.0.bin"
