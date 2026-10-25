@@ -8,7 +8,7 @@ This package also ships a terminal simulator, so you can chat with Maya and fake
 
 ## Requirements
 
-- Python 3.11 or newer
+- Python 3.11 or newer (3.11–3.13 if you want her [voice](#voice))
 - [Ollama](https://ollama.com/download) (Windows, Linux or macOS). A GPU such as an RTX 3070 (8 GB) runs `qwen3:8b` comfortably.
 
 ## Setup
@@ -79,14 +79,21 @@ Type plain text to talk to Maya. Slash commands inject events on a virtual clock
 
 Maya can answer out loud with [Kokoro](https://github.com/thewh1teagle/kokoro-onnx), a small text-to-speech model that runs locally on the CPU. It is optional: without it she simply stays text-only.
 
-Install the extra and download the model files (a few hundred MB, saved to `models/`, which is git-ignored):
+Voice needs **Python 3.11–3.13**: `kokoro-onnx` doesn't install on Python 3.14 or newer yet. Check with `python --version` inside the activated venv. If it says 3.14, make the venv with Python 3.13 instead (install it from [python.org](https://www.python.org/downloads/) first if needed), from the `brain/` folder:
+
+- Windows: delete the `.venv` folder, then `py -3.13 -m venv .venv`
+- Linux / macOS: `rm -rf .venv`, then `python3.13 -m venv .venv`
+
+Activate it again and reinstall (`pip install -e .`) as in [Setup](#setup).
+
+Then, from the `brain/` folder, install the extra and download the model files (a few hundred MB, saved to `models/`, which is git-ignored):
 
 ```
 pip install -e ".[voice]"
 python -m maya_brain.fetch_voice
 ```
 
-Voice is on by default once the models are there. If `[voice]` is enabled but the models or the package are missing, the server prints one warning at startup and carries on without voice. A broken `onnxruntime` install also shows up as "unavailable". Tune it in `maya.toml`:
+Voice is on by default once the models are there. If `[voice]` is enabled but the models or the package are missing, the server prints one warning at startup saying why (the missing files, or the import error such as "DLL load failed") and carries on without voice; on Python 3.14+ it also reminds you of the version limit. A broken `onnxruntime` install also shows up as "unavailable". When voice is ready, the server loads the model in the background at startup, so her first spoken reply isn't late. Tune it in `maya.toml`:
 
 ```toml
 [voice]
