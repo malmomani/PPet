@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import logging
+import random
 import sqlite3
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
@@ -24,12 +25,14 @@ from .protocol import (
     Event,
     GlanceEvent,
     Hello,
+    Move,
     NotificationEvent,
     OfflineSummary,
     ProtocolError,
     Say,
     Screen,
     State,
+    TEASE_INTENTS,
     Typing,
     UserDrag,
     UserMessage,
@@ -38,7 +41,7 @@ from .protocol import (
     parse_event,
 )
 from .reflection import Reflection
-from .thinker import Context, Thinker, Thought
+from .thinker import BODY_QUIET_DETAIL, Context, Thinker, Thought, describe_body
 from .tts import TTS, TTSError, speakable
 
 log = logging.getLogger(__name__)
@@ -52,6 +55,10 @@ SUMMARIZE_IDLE = timedelta(minutes=10)
 SUMMARIZE_RETRY = timedelta(minutes=30)  # back-off after a failed summary
 REFLECT_IDLE = timedelta(minutes=10)  # reflection holds the lock for several LLM calls: not while the user is around
 MIN_APP_USE_S = 120
+SCREEN_FRESH = timedelta(minutes=10)  # how long a glance counts as "on screen now"
+TEASE_TIERS = {"friend", "close"}
+TEASE_MOODS = {"happy", "curious", "excited"}
+BODY_THOUGHT_EVERY_S = (120, 240)
 
 
 def bubble_ms(text: str) -> int:
@@ -124,6 +131,8 @@ class Mind:
         self.glance: GlanceEvent | None = None  # the latest screen text (RAM only)
         self.glance_at: datetime | None = None
         self.body: BodyEvent | None = None  # where her body is now (RAM only)
+        self._rng = random.Random()
+        self._next_body_at: datetime | None = None  # when the next silent body thought is due
         self.memory = Memory(db, llm, clock)
         self.persona = Persona(db, cfg.persona, clock)
         self.emotion = Emotion(db, clock)
@@ -206,7 +215,7 @@ class Mind:
         self.emotion.note_interaction()
         self._voice_reply = event.voice
         try:
-            await self._respond(Context("user_message", f'User says: "{event.text}"'))
+            await self._respond(self._ctx("user_message", f'User says: "{event.text}"'))
         finally:
             self._voice_reply = False
 
@@ -217,14 +226,14 @@ class Mind:
             await self._emit(Animate(name="happy"))
             return
         self._last_tap_think = now
-        await self._respond(Context("user_tap", "User tapped you."))
+        await self._respond(self._ctx("user_tap", "User tapped you."))
 
     async def _on_drag(self, event: UserDrag) -> None:
         text = "User picked you up and threw you!" if event.thrown else "User dragged you around"
         self.memory.add_turn("event", text)
         await self._emit(Animate(name="surprised"))
         if event.thrown:
-            thought = await self._think(Context("event", text))
+            thought = await self._think(self._ctx("event", text))
             if thought is not None:
                 await self._apply(thought, closeness=True)
 
@@ -253,6 +262,32 @@ class Mind:
 
     # ---- thinking ----
 
+    def _glance_fresh(self) -> bool:
+        return self.glance is not None and self.glance_at is not None and self.clock.now() - self.glance_at <= SCREEN_FRESH
+
+    def _tease_allowed(self) -> bool:
+        """May she tease the user right now (and so be told which buttons she can tease)?"""
+        return (
+            self._glance_fresh()
+            and bool(self.glance.targets)
+            and self.emotion.tier() in TEASE_TIERS
+            and self.emotion.mood()[0] in TEASE_MOODS
+            and self.initiative.tease_ready()
+            and self._can_be_heard()
+        )
+
+    def _ctx(self, trigger: str, detail: str) -> Context:
+        """Every thought's context: what she is doing, where her body is, what is on screen."""
+        app = self.initiative.current_app()
+        ctx = Context(trigger, detail, *(app or ()))
+        if self.body is not None:
+            ctx.body = describe_body(self.body, app[0] if app else None)
+        if self._glance_fresh():
+            ctx.screen_app, ctx.screen_lines = self.glance.app, tuple(self.glance.lines)
+            if self._tease_allowed():
+                ctx.tease_targets = tuple(self.glance.targets)
+        return ctx
+
     async def _think(self, ctx: Context) -> Thought | None:
         try:
             return await self.thinker.think(ctx)
@@ -280,6 +315,7 @@ class Mind:
         her own unprompted musings must not make her fonder or colder of the user.
         """
         before = (self.emotion.mood()[0], self.emotion.tier())
+        tease_ok = self._tease_allowed()  # as offered to her in the prompt, before this thought changes her mood
         if thought.mood:
             self.emotion.set_mood(thought.mood, thought.mood_intensity)
         if closeness:
@@ -290,9 +326,22 @@ class Mind:
         if spoke:
             self.memory.add_turn("maya", thought.say)
             await self._say(thought.say)
+        if thought.move is not None:
+            await self._move(thought.move.intent, thought.move.target, tease_ok)
         if (self.emotion.mood()[0], self.emotion.tier()) != before:
             await self._emit_state()
         return spoke
+
+    async def _move(self, intent: str, target: str | None, tease_ok: bool) -> None:
+        """Send a move to the body. Teases only when allowed and aimed at a button that is really on screen."""
+        if intent in TEASE_INTENTS:
+            if not tease_ok or target not in self.glance.targets:
+                return
+            self.initiative.teased()
+            self.memory.add_turn("event", f"you teased the user: {intent} {target}")
+        else:
+            target = None
+        await self._emit(Move(intent=intent, target=target))
 
     async def _say(self, text: str) -> None:
         say = Say(text=text, bubble_ms=bubble_ms(text))
@@ -343,10 +392,8 @@ class Mind:
         """Call only while holding the lock."""
         if not self._can_be_heard() or not self.initiative.should_fire():
             return
-        app = self.initiative.current_app()
         reason = self.initiative.last_reason or "You feel like saying something."
-        ctx = Context("initiative", reason, *(app or ()))
-        thought = await self._think(ctx)
+        thought = await self._think(self._ctx("initiative", reason))
         spoke = False
         if thought is not None:
             spoke = await self._apply(thought)
@@ -373,6 +420,25 @@ class Mind:
             if user_idle and self.reflection.due(self._last_event):
                 await self.reflection.reflect()
             await self._maybe_initiate()
+            await self._maybe_body_thought()
+
+    async def _maybe_body_thought(self) -> None:
+        """Every 2-4 minutes while the user is around, a silent thought about what her body does next."""
+        if not (self._can_be_heard() and self.initiative.body_allowed()):
+            return
+        now = self.clock.now()
+        if self._next_body_at is None:
+            self._schedule_body_thought(now)
+            return
+        if now < self._next_body_at:
+            return
+        thought = await self._think(self._ctx("body", BODY_QUIET_DETAIL))
+        if thought is not None:
+            await self._apply(thought)
+        self._schedule_body_thought(self.clock.now())
+
+    def _schedule_body_thought(self, now: datetime) -> None:
+        self._next_body_at = now + timedelta(seconds=self._rng.uniform(*BODY_THOUGHT_EVERY_S))
 
     async def run_ticker(self, stop: asyncio.Event) -> None:
         while not stop.is_set():

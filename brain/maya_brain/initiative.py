@@ -42,6 +42,8 @@ GLANCE_BUMP = 4.0
 GLANCE_GAP = timedelta(seconds=300)  # across all apps
 FELL_BUMP = 6.0
 SHOOED_BUMP = 10.0
+BODY_ACTIVE_WINDOW = timedelta(seconds=300)  # silent body thoughts only while the user is around
+TEASE_GAP = timedelta(seconds=600)
 
 # Events that mean the user is actually around. Hello, Charging, NotificationEvent, GlanceEvent, BodyEvent,
 # BodyMomentEvent and OfflineSummary are not.
@@ -101,6 +103,7 @@ class Initiative:
         self._late_hour: str | None = s.get("late_hour")
         self._notified: dict[str, str] = s.get("notified", {})  # sender -> when they last bumped the urge
         self._glanced: str | None = s.get("glanced")  # when a glance last bumped the urge
+        self._last_tease: str | None = s.get("last_tease")  # when she last teased the user
 
     # ---- persistence ----
 
@@ -124,6 +127,7 @@ class Initiative:
                 "late_hour": self._late_hour,
                 "notified": self._notified,
                 "glanced": self._glanced,
+                "last_tease": self._last_tease,
             },
         )
 
@@ -278,6 +282,26 @@ class Initiative:
             if night_count >= self.cfg.late_night_max:
                 return False
         return True
+
+    def _hushed(self, now: datetime) -> bool:
+        """Shushed or in quiet hours: nothing unprompted, spoken or not."""
+        silent_until = _dt(self._silent_until)
+        return (silent_until is not None and now < silent_until) or self._in_quiet(now)
+
+    def body_allowed(self) -> bool:
+        """May a silent body thought run now? Only while the user is around and she isn't asked to be quiet."""
+        now = self.clock.now()
+        active = _dt(self._last_activity)
+        return not self._hushed(now) and active is not None and now - active <= BODY_ACTIVE_WINDOW
+
+    def tease_ready(self) -> bool:
+        now = self.clock.now()
+        last = _dt(self._last_tease)
+        return not self._hushed(now) and (last is None or now - last >= TEASE_GAP)
+
+    def teased(self) -> None:
+        self._last_tease = self.clock.now().isoformat()
+        self._save()
 
     def fired(self, spoke: bool) -> None:
         now = self.clock.now()
