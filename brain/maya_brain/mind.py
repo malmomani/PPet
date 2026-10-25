@@ -19,6 +19,7 @@ from .protocol import (
     Action,
     Animate,
     AppClosed,
+    AppOpened,
     Audio,
     BodyEvent,
     BodyMomentEvent,
@@ -59,6 +60,7 @@ SCREEN_FRESH = timedelta(minutes=10)  # how long a glance counts as "on screen n
 TEASE_TIERS = {"friend", "close"}
 TEASE_MOODS = {"happy", "curious", "excited"}
 BODY_THOUGHT_EVERY_S = (120, 240)
+BODY_CHAT_QUIET = timedelta(seconds=60)  # no silent body thought this soon after the user talked to or tapped her
 
 
 def bubble_ms(text: str) -> int:
@@ -125,6 +127,7 @@ class Mind:
         self._lock = asyncio.Lock()
         self._last_event: datetime | None = None
         self._last_tap_think: datetime | None = None
+        self._last_chat: datetime | None = None  # the user's last message or tap
         self._summarize_after: datetime | None = None
         self._connected = True  # the gateway reports the real state; tests and the simulator are always "connected"
         self._screen_on: bool | None = None  # None = unknown (treated as on)
@@ -174,6 +177,9 @@ class Mind:
         async with self._lock:
             if isinstance(event, USER_ACTIVITY):
                 self._last_event = self.clock.now()
+            if isinstance(event, (UserMessage, UserTap)):
+                self._last_chat = self.clock.now()
+            fall_counts = self.initiative.fall_counts()  # before on_event starts a new fall window
             self.initiative.on_event(event)
             if isinstance(event, UserMessage):
                 await self._on_message(event)
@@ -187,13 +193,20 @@ class Mind:
                 await self._emit_state()
             elif isinstance(event, Screen):
                 self._screen_on = event.on
+                if not event.on:
+                    self._forget_glance()
             elif isinstance(event, UserDrag):
                 await self._on_drag(event)
             elif isinstance(event, UserShush):
                 self.initiative.shush()
                 self.memory.add_turn("event", "User asked you to be quiet for a while")
                 await self._emit(Animate(name="sit"))
+            elif isinstance(event, AppOpened):
+                if self.glance is not None and self.glance.package != event.package:
+                    self._forget_glance()
             elif isinstance(event, AppClosed):
+                if self.glance is not None and self.glance.package == event.package:
+                    self._forget_glance()
                 if event.duration_s >= MIN_APP_USE_S:
                     self.memory.add_turn("event", f"User used {event.label} for {_fmt_use(event.duration_s)}")
             elif isinstance(event, NotificationEvent):
@@ -205,10 +218,15 @@ class Mind:
             elif isinstance(event, BodyEvent):
                 self.body = event
             elif isinstance(event, BodyMomentEvent):
-                self.memory.add_turn("event", _moment_line(event))
+                if event.kind != "fell" or fall_counts:
+                    self.memory.add_turn("event", _moment_line(event))
             elif isinstance(event, OfflineSummary):
                 self._on_offline_summary(event)
             await self._maybe_initiate()
+
+    def _forget_glance(self) -> None:
+        """The screen she last saw is gone (another app, the app closed, the screen off)."""
+        self.glance, self.glance_at = None, None
 
     async def _on_message(self, event: UserMessage) -> None:
         self.memory.add_turn("user", event.text)
@@ -423,8 +441,11 @@ class Mind:
             await self._maybe_body_thought()
 
     async def _maybe_body_thought(self) -> None:
-        """Every 2-4 minutes while the user is around, a silent thought about what her body does next."""
-        if not (self._can_be_heard() and self.initiative.body_allowed()):
+        """Every 2-4 minutes while the user is around, a silent thought about what her body does next.
+
+        Only for a phone that reports her body, and not right after the user talked to or tapped her.
+        """
+        if not (self.body is not None and self._can_be_heard() and self.initiative.body_allowed()):
             return
         now = self.clock.now()
         if self._next_body_at is None:
@@ -432,6 +453,8 @@ class Mind:
             return
         if now < self._next_body_at:
             return
+        if self._last_chat is not None and now - self._last_chat < BODY_CHAT_QUIET:
+            return  # stays due
         thought = await self._think(self._ctx("body", BODY_QUIET_DETAIL))
         if thought is not None:
             await self._apply(thought)

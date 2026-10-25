@@ -60,9 +60,10 @@ interface OverlayHook {
     /**
      * What she can stand on and tease in the current app (Layout.EMPTY: only the floor), the
      * keyboard's top edge in screen pixels while one is open, and [restricted]: no teasing now
-     * (keyboard open, a do-not-watch app, or a call).
+     * (keyboard open, a do-not-watch app, or a call). [quiet]: the app's last layout cut at Maya's
+     * own window; losing her platform to it is no fall worth telling the brain about.
      */
-    fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean)
+    fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean, quiet: Boolean)
 }
 
 /**
@@ -243,7 +244,7 @@ class MayaService : Service() {
         }
         body.setConnected(status == Status.HERE)
         body.setScreenOn(screenUsable())
-        if (screenLayoutPkg != null) body.setScreenLayout(screenLayout, screenKeyboardTop, screenRestricted)
+        if (screenLayoutPkg != null) body.setScreenLayout(screenLayout, screenKeyboardTop, screenRestricted, ownLayout())
         overlayBody = body
         overlay = body
         body.show()
@@ -328,8 +329,11 @@ class MayaService : Service() {
         screenLayout = layout
         screenKeyboardTop = keyboardTop
         screenRestricted = isRestricted(pkg, keyboardTop)
-        overlay?.setScreenLayout(layout, keyboardTop, screenRestricted)
+        overlay?.setScreenLayout(layout, keyboardTop, screenRestricted, ownLayout())
     }
+
+    /** The last layout is the app's, cut at Maya's own window (the chat, her settings) in front of it. */
+    private fun ownLayout(): Boolean = screenLayoutPkg == packageName
 
     /** No teasing while the user types, in a do-not-watch app (or over one), or during a call. */
     private fun isRestricted(pkg: String, keyboardTop: Int?): Boolean =
@@ -365,16 +369,17 @@ class MayaService : Service() {
             val restricted = isRestricted(layoutPkg, screenKeyboardTop)
             if (restricted != screenRestricted) {
                 screenRestricted = restricted
-                overlay?.setScreenLayout(screenLayout, screenKeyboardTop, restricted)
+                overlay?.setScreenLayout(screenLayout, screenKeyboardTop, restricted, ownLayout())
             }
         }
         val pkg = screenPkg
         val now = SystemClock.elapsedRealtime()
         // The last layout must be the app's own and current (she is visible, so layouts are being
         // rebuilt): while Maya's window, system UI or the lock screen is in front, or she is hidden,
-        // the glance stays due instead of being spent on a screen she may not read.
+        // the glance stays due instead of being spent on a screen she may not read. Nor while the
+        // user types (keyboard open): it is taken once the keyboard closes.
         val allowed = status == Status.HERE && screenActive && pkg != null && screenLayoutPkg == pkg &&
-            !doNotWatch.isBlocked(pkg) && screenUsable()
+            screenKeyboardTop == null && !doNotWatch.isBlocked(pkg) && screenUsable()
         if (!scheduler.poll(now, allowed)) return
         val g = ScreenBridge.service?.glance() ?: return
         if (doNotWatch.isBlocked(g.packageName)) return
@@ -389,7 +394,7 @@ class MayaService : Service() {
         screenLayout = Layout.EMPTY
         screenKeyboardTop = null
         screenRestricted = false
-        overlay?.setScreenLayout(Layout.EMPTY, null, false)
+        overlay?.setScreenLayout(Layout.EMPTY, null, false, false)
     }
 
     /** On every connect: fresh glance memory, and a glance at the current app soon. */
@@ -412,11 +417,14 @@ class MayaService : Service() {
                 appUsage?.setScreenOn(true)
                 overlay?.setScreenOn(true)
                 updateScreenActive()
+                // the brain forgot the screen when it went off: a fresh glance at the app soon
+                glanceScheduler?.onApp(screenPkg, SystemClock.elapsedRealtime())
             } else {
                 overlay?.setScreenOn(false)
                 updateScreenActive()
                 appUsage?.setScreenOn(false) // emits AppClosed for the current app first
                 emit(e)
+                glanceScheduler?.onApp(null, SystemClock.elapsedRealtime())
             }
         } else {
             emit(e)

@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from maya_brain.protocol import (
+    AppClosed,
+    AppOpened,
     BodyEvent,
     BodyMomentEvent,
     GlanceEvent,
@@ -142,6 +144,33 @@ async def test_glance_is_kept_in_memory_only(mind, clock):
     assert mind.glance is g2 and mind.glance_at == clock.now()
 
 
+async def test_glance_forgotten_when_the_screen_changes(mind, clock):
+    async def seen(app="Chrome"):
+        await mind.handle(glance(app, ["hello world, this is long"]))
+        assert mind.glance is not None
+
+    await seen()
+    await mind.handle(AppOpened(package="chrome", label="Chrome"))  # the same app: still on screen
+    assert mind.glance is not None
+    await mind.handle(AppClosed(package="maps", label="Maps", duration_s=5))  # another app closed
+    assert mind.glance is not None
+    await mind.handle(AppOpened(package="maps", label="Maps"))  # switched away
+    assert mind.glance is None and mind.glance_at is None
+
+    await seen()
+    await mind.handle(AppClosed(package="chrome", label="Chrome", duration_s=5))
+    assert mind.glance is None and mind.glance_at is None
+
+    await seen()
+    await mind.handle(Screen(on=True))
+    assert mind.glance is not None
+    await mind.handle(Screen(on=False))
+    assert mind.glance is None and mind.glance_at is None
+    # a forgotten screen is not shown to her
+    await mind.handle(UserTap())
+    assert "On screen now" not in mind.thinker.llm.calls[-1][-1]["content"]
+
+
 def test_glance_bump_once_per_5_min(ini, clock, db):
     from maya_brain.config import InitiativeConfig
     from maya_brain.initiative import Initiative
@@ -222,6 +251,33 @@ async def test_moments_memory_and_bumps(mind):
     assert last.content == "the user shooed you away"
     assert ini.urge == pytest.approx(26)
     assert ini.last_reason == "the user just shooed you away"
+
+
+async def test_falls_count_once_per_5_min(mind, clock, db):
+    from maya_brain.config import InitiativeConfig
+    from maya_brain.initiative import Initiative
+
+    ini = mind.initiative
+
+    def falls():
+        return [t for t in mind.memory.recent_turns() if t.content == "you fell when the screen moved under you"]
+
+    await mind.handle(BodyMomentEvent(kind="fell"))
+    assert ini.urge == pytest.approx(6) and len(falls()) == 1
+    clock.advance(timedelta(seconds=299))
+    for _ in range(5):  # a scrolling feed drops her again and again
+        await mind.handle(BodyMomentEvent(kind="fell", target="like"))
+    assert ini.urge == pytest.approx(6) and len(falls()) == 1
+    await mind.handle(BodyMomentEvent(kind="shooed", target="send"))  # shoos are not limited
+    assert ini.urge == pytest.approx(16)
+    # the limit persists
+    assert not Initiative(InitiativeConfig(), db, clock).fall_counts()
+    clock.advance(timedelta(seconds=1))
+    assert Initiative(InitiativeConfig(), db, clock).fall_counts()
+    await mind.handle(BodyMomentEvent(kind="fell"))
+    assert ini.urge == pytest.approx(22) and len(falls()) == 2
+    await mind.handle(BodyMomentEvent(kind="fell"))
+    assert ini.urge == pytest.approx(22) and len(falls()) == 2  # the window restarted
 
 
 def test_sim_glance_body_moment_commands():

@@ -257,14 +257,43 @@ class BehaviorCommandTest {
     @Test fun things_asked_in_the_air_run_in_arrival_order() {
         val b = mk()
         b.putFeet(500f, 1000f)
-        b.play("wave"); b.command("nap", null) // the later command is not wiped by the earlier play
-        b.settle(); assertEquals("nap", b.animation)
+        b.play("wave"); b.command("nap", null) // the later command waits for the earlier gesture
+        b.settle(); assertEquals("wave", b.animation)
+        b.tick(ONE_SHOT_MS.toLong()); b.tick(10); assertEquals("nap", b.animation)
         b.tick(ONE_SHOT_MS.toLong() + 10); assertEquals("nap", b.animation)
 
         val c = mk()
         c.putFeet(500f, 1000f)
         c.command("nap", null); c.play("happy") // here the play is the later one
         c.settle(); assertEquals("happy", c.animation)
+    }
+
+    @Test fun a_move_waits_for_the_gesture_of_the_same_thought() {
+        for (seed in 0 until 10) {
+            val b = mk(seed)
+            b.play("happy"); b.command("stay", null)
+            val x0 = b.x
+            repeat(ONE_SHOT_MS / 10 - 1) { // the whole gesture shows
+                b.tick(10)
+                assertEquals("happy", b.animation); assertEquals(x0, b.x)
+            }
+            b.tick(10); b.tick(10)
+            assertEquals("idle", b.animation)
+            repeat(980) { // then the stay: 9.8 s still, longer than any ordinary decision wait (8 s)
+                b.tick(10)
+                assertEquals("idle", b.animation); assertEquals(x0, b.x)
+            }
+        }
+
+        val c = mk(speed = 200f) // on the floor at the right side
+        c.play("wave"); c.command("go_right", null); c.command("go_left", null) // the latest wins
+        c.tick(ONE_SHOT_MS.toLong() - 10); assertEquals("wave", c.animation); assertEquals(950f, c.state.feetX)
+        c.tick(10); c.tick(100)
+        assertEquals("walk", c.animation); assertTrue(c.facingLeft); assertTrue(c.state.feetX < 950f)
+
+        val d = mk() // a gesture replaced by another animation: the move runs at once
+        d.play("happy"); d.command("nap", null); d.play("idle")
+        d.tick(10); assertEquals("nap", d.animation)
     }
 
     @Test fun command_and_play_in_the_air_run_on_landing() {
@@ -484,6 +513,11 @@ class BehaviorCommandTest {
         dragged.setLayout(layout(p)); dragged.putFeet(400f, 1000f)
         dragged.dragStart(); dragged.dragEnd(700f, 100f); dragged.settle()
         assertTrue(dragged.drainMoments().isEmpty())
+
+        val trimmed = mk() // the app's layout cut at Maya's own window: she falls, but it is no `fell`
+        trimmed.setLayout(layout(p)); trimmed.putFeet(400f, 1000f)
+        trimmed.setLayout(Layout.EMPTY, quiet = true); trimmed.settle()
+        assertEquals("floor", trimmed.state.where); assertTrue(trimmed.drainMoments().isEmpty())
 
         val restricted = mk()
         restricted.setLayout(layout(p)); restricted.putFeet(400f, 1000f)

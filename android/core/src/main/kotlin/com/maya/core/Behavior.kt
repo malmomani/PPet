@@ -157,7 +157,7 @@ class Behavior(
 
     private var goal: Goal? = null
     private var tease: Tease? = null
-    /** At most one command and one play, in the order they arrived; run on landing. */
+    /** At most one command and one play, in the order they arrived; run on landing (a command also when a one-shot ends). */
     private val deferred = ArrayList<Deferred>()
     private val moments = ArrayList<Moment>()
     private var pendingFell: Moment? = null
@@ -279,6 +279,7 @@ class Behavior(
             return
         }
         if (!connected || pose != null) return
+        if (mode != Mode.ONE_SHOT && deferred.isNotEmpty()) return carryOn() // a move that waited for a gesture
         val g = goal
         if (g != null) {
             g.elapsedMs += dtMs
@@ -288,7 +289,11 @@ class Behavior(
         if (mode == Mode.WALK && walk(dtMs)) return
         remainingMs -= dtMs
         if (remainingMs > 0) return
-        if (mode == Mode.IDLE) decide() else resume()
+        when {
+            mode == Mode.IDLE -> decide()
+            mode == Mode.ONE_SHOT && deferred.isNotEmpty() -> carryOn()
+            else -> resume()
+        }
     }
 
     /**
@@ -316,13 +321,13 @@ class Behavior(
 
     /**
      * A `move` from the brain (spec §4.6). Ignored while dragged or disconnected and for unknown
-     * intents; replaces the move she is carrying out. In the air it runs on landing (the latest
-     * one wins); on a tease target she hops off first. `sit_on`/`poke` with no such target in the
+     * intents; replaces the move she is carrying out. In the air it runs on landing, during a
+     * one-shot gesture once the gesture ends (the latest one wins); on a tease target she hops off first. `sit_on`/`poke` with no such target in the
      * layout (or while restricted) play `happy` instead.
      */
     fun command(intent: String, tag: String?) {
         if (dragging || !connected || intent !in MOVE_INTENTS) return
-        if (airborne) return defer(DeferredCmd(intent, tag))
+        if (airborne || mode == Mode.ONE_SHOT) return defer(DeferredCmd(intent, tag))
         if (mode == Mode.TEASE) {
             hopOff()
             return defer(DeferredCmd(intent, tag))
@@ -434,11 +439,14 @@ class Behavior(
         revalidate(byLayout = false)
     }
 
-    /** Replaces the platforms; she follows hers if it moved ≤ 8 px, else (or if gone) she falls. */
-    fun setLayout(layout: Layout) {
+    /**
+     * Replaces the platforms; she follows hers if it moved ≤ 8 px, else (or if gone) she falls.
+     * A [quiet] layout (the app's last one cut at Maya's own window) never makes a `fell` moment.
+     */
+    fun setLayout(layout: Layout, quiet: Boolean = false) {
         platforms = layout.platforms
         targets = layout.targets
-        revalidate(byLayout = true)
+        revalidate(byLayout = !quiet)
     }
 
     /** Restricted (keyboard, call, do-not-watch app): only the floor exists, she never jumps. */
@@ -907,6 +915,11 @@ class Behavior(
         vy = 0f
         // a "fall" that comes straight back down at the same height was no fall (same edge, new tag)
         if (pendingFell != null && feetY != fellFromY) commitFell() else pendingFell = null
+        carryOn()
+    }
+
+    /** Back on her feet (landed, or a gesture ended): runs what was asked meanwhile, else carries on with the move. */
+    private fun carryOn() {
         goIdle()
         val queued = deferred.toList()
         deferred.clear()

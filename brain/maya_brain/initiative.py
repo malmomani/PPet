@@ -41,6 +41,7 @@ NOTIFICATION_GAP = timedelta(seconds=600)  # per sender
 GLANCE_BUMP = 4.0
 GLANCE_GAP = timedelta(seconds=300)  # across all apps
 FELL_BUMP = 6.0
+FELL_GAP = timedelta(seconds=300)  # one fall counts (urge and memory) at most every 5 min
 SHOOED_BUMP = 10.0
 BODY_ACTIVE_WINDOW = timedelta(seconds=300)  # silent body thoughts only while the user is around
 TEASE_GAP = timedelta(seconds=600)
@@ -103,6 +104,7 @@ class Initiative:
         self._late_hour: str | None = s.get("late_hour")
         self._notified: dict[str, str] = s.get("notified", {})  # sender -> when they last bumped the urge
         self._glanced: str | None = s.get("glanced")  # when a glance last bumped the urge
+        self._fell: str | None = s.get("fell")  # when a fall last counted
         self._last_tease: str | None = s.get("last_tease")  # when she last teased the user
 
     # ---- persistence ----
@@ -127,6 +129,7 @@ class Initiative:
                 "late_hour": self._late_hour,
                 "notified": self._notified,
                 "glanced": self._glanced,
+                "fell": self._fell,
                 "last_tease": self._last_tease,
             },
         )
@@ -201,7 +204,9 @@ class Initiative:
                 bumps.append((GLANCE_BUMP, f"something new on screen in {event.app}"))
         elif isinstance(event, BodyMomentEvent):
             if event.kind == "fell":
-                bumps.append((FELL_BUMP, "you just fell because the screen moved under you"))
+                if self.fall_counts():
+                    self._fell = now.isoformat()
+                    bumps.append((FELL_BUMP, "you just fell because the screen moved under you"))
             else:
                 bumps.append((SHOOED_BUMP, _shooed_reason(event)))
 
@@ -293,6 +298,11 @@ class Initiative:
         now = self.clock.now()
         active = _dt(self._last_activity)
         return not self._hushed(now) and active is not None and now - active <= BODY_ACTIVE_WINDOW
+
+    def fall_counts(self) -> bool:
+        """Would a `fell` moment now count (bump the urge, be remembered)? At most one per FELL_GAP."""
+        fell = _dt(self._fell)
+        return fell is None or self.clock.now() - fell >= FELL_GAP
 
     def tease_ready(self) -> bool:
         now = self.clock.now()

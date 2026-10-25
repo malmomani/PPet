@@ -5,7 +5,7 @@ import pytest
 
 from maya_brain.config import InitiativeConfig
 from maya_brain.initiative import Initiative
-from maya_brain.protocol import BodyEvent, GlanceEvent, Move, Screen, UserMessage, UserShush
+from maya_brain.protocol import BodyEvent, GlanceEvent, Move, Screen, UserMessage, UserShush, UserTap
 from maya_brain.thinker import SELF_MODEL, Context, Thought, describe_body
 
 TEASE_LINE = '- sit_on/poke tease the user and need "target": one of send, like.'
@@ -95,7 +95,7 @@ async def test_body_and_screen_in_prompt(mind):
     # the app the user is in is added to the body line
     from maya_brain.protocol import AppOpened
 
-    await mind.handle(AppOpened(package="wa", label="WhatsApp"))
+    await mind.handle(AppOpened(package="whatsapp", label="WhatsApp"))
     mind.thinker.llm.calls.clear()
     mind.thinker.llm.replies = None
     mind._last_tap_think = None
@@ -337,7 +337,10 @@ def test_tease_ready_and_body_allowed_gates(ini, clock):
 
 
 async def active(mind):
+    """The user is around and the phone reports her body."""
     await mind.handle(Screen(on=True))
+    if mind.body is None:
+        await mind.handle(BodyEvent(doing="idle", where="floor", x=0.5, y=1.0))
 
 
 async def test_body_thought_timer(mind, sent, clock):
@@ -433,6 +436,36 @@ async def test_body_thought_gates(mind, clock):
     assert llm.calls == []
 
 
+async def test_body_thought_needs_a_reported_body(mind, clock):
+    llm = mind.thinker.llm
+    await mind.handle(Screen(on=True))  # an older phone: no body reports
+    await mind.tick()
+    mind._next_body_at = clock.now() - timedelta(seconds=1)
+    await mind.tick()
+    assert llm.calls == []
+    await mind.handle(BodyEvent(doing="idle", where="floor", x=0.5, y=1.0))
+    await mind.tick()
+    assert len(llm.calls) == 1
+
+
+async def test_body_thought_waits_a_minute_after_chat(mind, clock):
+    llm = mind.thinker.llm
+    for chat in (UserMessage(text="hi"), UserTap()):
+        await _due(mind, clock)
+        await mind.handle(chat)
+        llm.calls.clear()
+        mind._next_body_at = clock.now() - timedelta(seconds=1)
+        clock.advance(timedelta(seconds=59))
+        await mind.tick()
+        assert llm.calls == []  # still due, but the user just talked to her
+        clock.advance(timedelta(seconds=1))
+        await mind.tick()
+        assert len(llm.calls) == 1
+        assert mind.thinker.llm.calls[0][-1]["content"].endswith("you won't speak.")
+        clock.advance(timedelta(seconds=300))
+        llm.calls.clear()
+
+
 async def test_body_thought_can_tease_under_the_same_rules(mind, sent, clock):
     await prime(mind)
     await active(mind)
@@ -448,7 +481,7 @@ async def test_body_thought_can_tease_under_the_same_rules(mind, sent, clock):
 async def test_every_thought_sees_the_body(mind):
     await mind.handle(BodyEvent(doing="nap", where="floor", x=0.5, y=1.0))
     await mind.handle(glance("Maps", ["a long enough line about somewhere"], targets=()))
-    from maya_brain.protocol import UserDrag, UserTap
+    from maya_brain.protocol import UserDrag
 
     mind.initiative._set_urge(100)
     await mind.handle(Screen(on=True))  # initiative thought

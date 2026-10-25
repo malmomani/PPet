@@ -51,6 +51,28 @@ class GlanceSchedulerTest {
         assertTrue(g.taken("com.y", listOf("c"), 362_000))
     }
 
+    @Test fun first_glance_after_an_app_change_is_always_sent() {
+        val g = GlanceScheduler()
+        g.onApp("com.x", 0)
+        assertTrue(g.poll(2_000, true)); assertTrue(g.taken("com.x", lines, 2_000))
+        // to another app and back: X's unchanged text goes out again (the brain dropped it)
+        g.onApp("com.y", 10_000)
+        assertTrue(g.poll(12_000, true)); assertTrue(g.taken("com.y", listOf("y"), 12_000))
+        g.onApp("com.x", 20_000)
+        assertTrue(g.poll(22_000, true)); assertTrue(g.taken("com.x", lines, 22_000))
+        // the periodic same-app re-check still dedupes
+        assertTrue(g.poll(202_000, true)); assertFalse(g.taken("com.x", lines, 202_000))
+        // an app change whose glance never got taken (blocked app, failed capture) still counts
+        g.onApp("com.z", 210_000)
+        g.onApp("com.x", 211_000)
+        assertTrue(g.poll(213_000, true)); assertTrue(g.taken("com.x", lines, 213_000))
+        // off (null) and back to the same app counts as a change too
+        g.onApp(null, 220_000)
+        g.onApp("com.x", 230_000)
+        assertTrue(g.poll(232_000, true)); assertTrue(g.taken("com.x", lines, 232_000))
+        assertTrue(g.poll(412_000, true)); assertFalse(g.taken("com.x", lines, 412_000))
+    }
+
     @Test fun not_allowed_keeps_due() {
         val g = GlanceScheduler()
         g.onApp("com.x", 0)

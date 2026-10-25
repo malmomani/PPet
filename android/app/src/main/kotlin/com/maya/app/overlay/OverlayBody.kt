@@ -54,7 +54,7 @@ private const val TAG = "MayaOverlay"
 
 /**
  * Maya's floating body: a sprite-sized overlay window that roams the whole screen (the floor near
- * the bottom, or the keyboard's top, plus the platforms of the current app's [Layout]), moved by a
+ * the bottom, plus the platforms of the current app's [Layout]), moved by a
  * ~30 fps Choreographer loop that drives [Behavior], plus her speech bubble and the chat window.
  * The brain steers her with [Move] and sets how playful she is with [State]; every frame she
  * reports her body ([Body], throttled by [BodyReporter]) and what happened to it ([BodyMoment]).
@@ -93,7 +93,6 @@ class OverlayBody(
 
     // What the body was told, kept so a new Behavior (rotation) starts from the same place.
     private var layout: Layout = Layout.EMPTY
-    private var keyboardTop: Int? = null
     private var restricted = false
     private var mood: String? = null
     private var tier: String? = null
@@ -216,17 +215,18 @@ class OverlayBody(
     }
 
     /**
-     * The current app's platforms and tease targets; an open keyboard is her floor. Restriction
-     * goes first, so platforms that vanish because she may not use them now (a call, a
-     * do-not-watch app) never count as her falling off.
+     * The current app's platforms and tease targets. An open keyboard does not move her floor: she
+     * keeps resting behind it, out of the way of the compose bar and Send (restricted keeps her off
+     * the buttons above it). Restriction goes first, so platforms that vanish because she may not
+     * use them now (typing, a call, a do-not-watch app) never count as her falling off; nor do
+     * those cut away by Maya's own window ([quiet]).
      */
-    override fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean) {
+    override fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean, quiet: Boolean) {
         this.layout = layout
-        this.keyboardTop = keyboardTop
         this.restricted = restricted
         behavior.setFloor(floorY())
         behavior.setRestricted(restricted)
-        behavior.setLayout(layout)
+        behavior.setLayout(layout, quiet)
     }
 
     /** Sustained pose from what's going on: listening beats talking beats thinking. */
@@ -330,6 +330,13 @@ class OverlayBody(
         report()
     }
 
+    /** Sends the moments since the last call (dropped while disconnected). */
+    private fun emitMoments() {
+        val moments = behavior.drainMoments()
+        if (!connected) return
+        for (m in moments) emit(BodyMoment(m.kind, m.target))
+    }
+
     /** True while the finger or a throw places the window (Behavior is in its dragged state). */
     private fun held(): Boolean = dragging || throwAnim != null
 
@@ -339,9 +346,8 @@ class OverlayBody(
      * (moments from then are dropped); [setConnected] makes the next report go out at once.
      */
     private fun report() {
-        val moments = behavior.drainMoments()
+        emitMoments()
         if (!connected) return
-        for (m in moments) emit(BodyMoment(m.kind, m.target))
         val s = behavior.state
         // While held, Behavior's feet stay where she was picked up: report the window's instead.
         val feetX = if (held()) params.x + spriteSize / 2f else s.feetX
@@ -469,6 +475,7 @@ class OverlayBody(
         // A tap while she teases a button shoos her off it: the brain still hears the tap, but
         // no chat window opens.
         val shooed = behavior.tapped()
+        if (shooed) emitMoments() // the brain hears it was a shoo before it hears the tap
         emit(UserTap())
         if (shooed) return
         if (!connected) {
@@ -665,7 +672,7 @@ class OverlayBody(
     private fun releaseAtWindow() = behavior.dragEnd(params.x.toFloat(), params.y.toFloat())
 
     /**
-     * Where her feet rest with no keyboard: the line they always rested on, [BOTTOM_MARGIN_DP]
+     * Where her feet rest on the floor: the line they always rested on, [BOTTOM_MARGIN_DP]
      * above the screen bottom (the window's bottom edge) less the gap under her feet.
      */
     private fun defaultFloorY(): Int {
@@ -673,11 +680,8 @@ class OverlayBody(
         return restingTop + footY
     }
 
-    /** The open keyboard's top is her floor; never below the usual floor (a stale or odd value). */
-    private fun floorY(): Int {
-        val default = defaultFloorY()
-        return keyboardTop?.let { minOf(it, default) } ?: default
-    }
+    /** Her floor: always the usual resting line (behind the keyboard while one is open). */
+    private fun floorY(): Int = defaultFloorY()
 
     /** A body for the current screen size that knows everything the old one was told. */
     private fun newBehavior(): Behavior {

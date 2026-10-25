@@ -101,8 +101,8 @@ platform scrolled/vanished; the user tapped her off a tease target. Not queued.
 - **Platforms**: the top edge of every visible node (clickable or editable, or an image ≥ 48 dp)
   whose width ≥ 0.6 × sprite width and whose top leaves room for her above it (≥ status bar + sprite
   height), excluding anything below `keyboardTop`. Overlapping/adjacent edges on the same y (±4 px)
-  merge. At most 30 platforms (largest first). Plus the **floor**: screen bottom, or the keyboard's
-  top when the keyboard is open.
+  merge. At most 30 platforms (largest first). Plus the **floor**: the usual resting line near the
+  screen bottom, kept while the keyboard is open (she rests behind it, clear of the compose bar/Send).
 
 ### 4.4 Glance scheduler (pure core `GlanceScheduler`)
 - App change → glance due in 2 s (re-armed if the app changes again first).
