@@ -20,6 +20,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
 ]
+voice = ["kokoro-onnx>=0.4"]
 
 [tool.setuptools.packages.find]
 include = ["maya_brain*"]
