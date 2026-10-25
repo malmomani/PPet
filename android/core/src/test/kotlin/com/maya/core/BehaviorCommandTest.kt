@@ -48,15 +48,21 @@ class BehaviorCommandTest {
     // ---- plain intents ----
 
     @Test fun stay() {
-        val b = mk()
-        b.play("walk"); assertEquals("walk", b.animation)
-        b.command("stay", null)
-        assertEquals("idle", b.animation)
-        val x0 = b.x
-        repeat(995) { // 9 950 ms: longer than any ordinary decision wait (8 s), and she never moves
-            b.tick(10)
-            assertEquals("idle", b.animation); assertEquals(x0, b.x)
+        var decidedAfter = 0
+        for (seed in 0 until 30) {
+            val b = mk(seed)
+            b.play("walk"); assertEquals("walk", b.animation)
+            b.command("stay", null)
+            assertEquals("idle", b.animation)
+            val x0 = b.x
+            repeat(999) { // 9 990 ms: longer than any ordinary decision wait (8 s), and she never moves
+                b.tick(10)
+                assertEquals("idle", b.animation); assertEquals(x0, b.x)
+            }
+            b.tick(10) // 10 s: she decides again
+            if (b.animation != "idle") decidedAfter++
         }
+        assertTrue("never decided after the stay", decidedAfter > 0)
     }
 
     @Test fun wander() {
@@ -134,6 +140,12 @@ class BehaviorCommandTest {
         val c = mk()
         c.command("go_up", null) // nothing to jump to: no-op
         assertTrue(c.state.grounded); assertEquals("idle", c.state.doing); assertEquals(H.toFloat(), c.state.feetY)
+
+        val d = mk() // on the highest platform, only lower ones in reach: never a jump down
+        d.setLayout(layout(Platform(100, 500, 1000), Platform(400, 800, 1300), Platform(0, 300, 1600)))
+        d.putFeet(300f, 1000f)
+        d.command("go_up", null)
+        assertTrue(d.state.grounded); assertEquals("idle", d.state.doing); assertEquals(1000f, d.state.feetY)
     }
 
     @Test fun go_down() {
@@ -145,6 +157,32 @@ class BehaviorCommandTest {
         b.runFor(5000) // drops onto the wide one, then hops down from it (no edge to step off)
         assertEquals("floor", b.state.where); assertEquals(H.toFloat(), b.state.feetY)
         assertTrue(b.drainMoments().isEmpty())
+    }
+
+    @Test fun go_down_and_come_closer_finish_over_touching_edges() {
+        // two edges at the same height, 1 px apart: stepping off one only lands on the other
+        val twins = layout(Platform(200, 600, 1000), Platform(601, 900, 1000))
+        val b = mk(speed = 200f)
+        b.setLayout(twins); b.putFeet(550f, 1000f)
+        b.command("go_down", null)
+        b.runFor(8000)
+        assertEquals("floor", b.state.where); assertEquals(H.toFloat(), b.state.feetY)
+
+        val c = mk(speed = 200f) // the nearest-centre one is out of reach from here: the floor centre
+        c.setLayout(layout(Platform(200, 600, 1700), Platform(601, 900, 1700), Platform(400, 600, 700))) // rise 1 000
+        c.putFeet(550f, 1700f)
+        c.command("come_closer", null)
+        c.runFor(8000)
+        assertEquals("floor", c.state.where); assertEquals(500f, c.state.feetX)
+    }
+
+    @Test fun a_move_not_finished_in_15s_is_given_up() {
+        val b = mk(speed = 20f) // 450 px to the floor centre at 20 px/s: 22.5 s
+        b.command("come_closer", null)
+        b.runFor(14_990); assertEquals("walk", b.animation)
+        b.runFor(20); assertEquals("idle", b.animation) // back to her own roaming
+        val x = b.x
+        b.runFor(2000); assertEquals(x, b.x)
     }
 
     @Test fun sit() {
@@ -164,12 +202,32 @@ class BehaviorCommandTest {
     }
 
     @Test fun peek() {
-        val b = mk()
+        // the nearer screen side is left; her platform does not reach it: down, then along the floor
+        val b = mk(speed = 200f)
         b.setLayout(layout(Platform(200, 600, 1000))); b.putFeet(300f, 1000f)
         b.command("peek", null)
         assertEquals("walk", b.animation); assertTrue(b.facingLeft)
-        b.tick(1000)
-        assertEquals("peek", b.animation); assertEquals(200f, b.state.feetX)
+        var t = 0
+        while (b.animation != "peek") {
+            b.tick(10); t += 10
+            assertTrue("never peeked", t <= 5000)
+        }
+        assertEquals(50f, b.state.feetX); assertEquals("floor", b.state.where)
+        assertTrue(b.facingLeft); assertEquals("peek", b.state.doing)
+
+        // a platform running to the screen side: she peeks from it
+        val c = mk(speed = 200f)
+        c.setLayout(layout(Platform(0, 400, 1000))); c.putFeet(300f, 1000f)
+        c.command("peek", null)
+        c.runFor(1500)
+        assertEquals("peek", c.animation); assertEquals(50f, c.state.feetX); assertEquals(1000f, c.state.feetY)
+
+        // on the right half: the right side
+        val d = mk(speed = 200f)
+        d.putFeet(700f, H.toFloat())
+        d.command("peek", null)
+        d.runFor(1500)
+        assertEquals("peek", d.animation); assertEquals(950f, d.state.feetX); assertFalse(d.facingLeft)
     }
 
     @Test fun unknown_intent_is_ignored() {
@@ -194,6 +252,19 @@ class BehaviorCommandTest {
         b.command("nap", null); assertEquals("surprised", b.animation)
         b.dragEnd(400f, (H - FOOT).toFloat())
         assertEquals("idle", b.animation)
+    }
+
+    @Test fun things_asked_in_the_air_run_in_arrival_order() {
+        val b = mk()
+        b.putFeet(500f, 1000f)
+        b.play("wave"); b.command("nap", null) // the later command is not wiped by the earlier play
+        b.settle(); assertEquals("nap", b.animation)
+        b.tick(ONE_SHOT_MS.toLong() + 10); assertEquals("nap", b.animation)
+
+        val c = mk()
+        c.putFeet(500f, 1000f)
+        c.command("nap", null); c.play("happy") // here the play is the later one
+        c.settle(); assertEquals("happy", c.animation)
     }
 
     @Test fun command_and_play_in_the_air_run_on_landing() {
@@ -329,6 +400,22 @@ class BehaviorCommandTest {
         b.runFor(1490); assertEquals("sulk", b.animation)
         b.runFor(20); assertEquals("jump", b.state.doing)
         b.settle(); assertNotEquals("target", b.state.where); assertNull(b.state.target)
+    }
+
+    @Test fun tap_late_in_a_tease_keeps_the_8s_cap() {
+        var found = false
+        for (seed in 0 until 300) {
+            val b = sittingOnSend(seed)
+            b.runFor(7900)
+            if (b.animation != "tease") continue // this one already ended
+            found = true
+            assertTrue(b.tapped())
+            assertEquals("sulk", b.animation)
+            b.runFor(100) // 8.0 s on the target: off, the sulk cut short
+            assertEquals("jump", b.state.doing)
+            break
+        }
+        assertTrue("no seed sat past 7.9 s", found)
     }
 
     @Test fun tap_while_heading_to_a_tease_shoos_too() {

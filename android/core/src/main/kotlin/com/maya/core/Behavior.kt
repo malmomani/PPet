@@ -38,12 +38,17 @@ const val POKE_MS = 2500
 const val SHOO_SULK_MS = 1500
 /** A tease she cannot reach within this long is given up (she plays `happy`). */
 const val TEASE_REACH_MS = 6000
+/** Any other move she has not finished within this long is given up (she roams on her own again). */
+const val MOVE_MAX_MS = 15_000
 
 /** Sustained poses the app holds while something is going on (her voice, listening, thinking). */
 val BODY_POSES = listOf("talk", "listen", "think")
 
 /** Animations that `play` shows for [ONE_SHOT_MS] and then return to idle. */
 private val ONE_SHOTS = setOf("wave", "peek", "happy", "sulk", "surprised")
+
+/** Something that happened to her body, for the brain: [kind] `fell` or `shooed`; [target] the tease tag involved. */
+data class Moment(val kind: String, val target: String?)
 
 /**
  * Renderer-agnostic snapshot of her body (spec §4.9), in screen pixels: feet position, velocity
@@ -52,9 +57,6 @@ private val ONE_SHOTS = setOf("wave", "peek", "happy", "sulk", "surprised")
  * floor|platform|target), the tease target tag, the gesture on top (a one-shot such as `wave`, or
  * a pose such as `talk`) and the point she looks at.
  */
-/** Something that happened to her body, for the brain: [kind] `fell` or `shooed`; [target] the tease tag involved. */
-data class Moment(val kind: String, val target: String?)
-
 data class BodyState(
     val feetX: Float,
     val feetY: Float,
@@ -97,16 +99,26 @@ class Behavior(
     /** What a walk toward [dest] ends in. */
     private enum class Then { NONE, PEEK, DROP, GOAL }
 
+    /** What she does on reaching a [Goal]. */
+    private enum class Arrive { NONE, PEEK, TEASE }
+
     /** A brain move being carried out: get onto [surface] (null = the floor), at feet x [x] (null = anywhere). */
-    private class Goal(var surface: Platform?, var x: Float?, val tease: Boolean) {
+    private class Goal(var surface: Platform?, var x: Float?, val arrive: Arrive = Arrive.NONE) {
         var elapsedMs = 0L
+        val tease: Boolean get() = arrive == Arrive.TEASE
     }
+
+    /** Something asked for while she could not do it yet (in the air, or hopping off a target). */
+    private sealed interface Deferred
+    private data class DeferredCmd(val intent: String, val tag: String?) : Deferred
+    private data class DeferredPlay(val name: String, val ms: Long) : Deferred
 
     private enum class Phase { APPROACH, SIT, POKE, SULK }
 
     /** A tease: [target] (followed as the layout changes) and the edge she stands on to reach it. */
     private class Tease(val kind: String, val tag: String, var target: Target, var surface: Platform) {
         var phase = Phase.APPROACH
+        var onTargetMs = 0L
     }
 
     private val half = spriteW / 2f
@@ -145,8 +157,8 @@ class Behavior(
 
     private var goal: Goal? = null
     private var tease: Tease? = null
-    private var pendingCmd: Pair<String, String?>? = null
-    private var pendingPlay: Pair<String, Long>? = null
+    /** At most one command and one play, in the order they arrived; run on landing. */
+    private val deferred = ArrayList<Deferred>()
     private val moments = ArrayList<Moment>()
     private var pendingFell: Moment? = null
     private var fellFromY = 0f
@@ -261,6 +273,7 @@ class Behavior(
             return
         }
         if (mode == Mode.TEASE) { // runs whatever the pose: the cap is hard
+            tease?.let { it.onTargetMs += dtMs }
             remainingMs -= dtMs
             if (remainingMs <= 0) hopOff()
             return
@@ -269,7 +282,7 @@ class Behavior(
         val g = goal
         if (g != null) {
             g.elapsedMs += dtMs
-            if (g.tease && g.elapsedMs >= TEASE_REACH_MS) return giveUp()
+            if (g.elapsedMs >= if (g.tease) TEASE_REACH_MS else MOVE_MAX_MS) return giveUp()
             if (mode == Mode.IDLE) return plan()
         }
         if (mode == Mode.WALK && walk(dtMs)) return
@@ -287,7 +300,7 @@ class Behavior(
     private fun playFor(name: String, ms: Long) {
         if (!connected || dragging) return
         if (airborne) {
-            if (name in ONE_SHOTS) pendingPlay = name to ms
+            if (name in ONE_SHOTS) defer(DeferredPlay(name, ms))
             return
         }
         if (mode == Mode.TEASE) return
@@ -309,26 +322,25 @@ class Behavior(
      */
     fun command(intent: String, tag: String?) {
         if (dragging || !connected || intent !in MOVE_INTENTS) return
-        if (airborne) { pendingCmd = intent to tag; return }
+        if (airborne) return defer(DeferredCmd(intent, tag))
         if (mode == Mode.TEASE) {
             hopOff()
-            pendingCmd = intent to tag
-            return
+            return defer(DeferredCmd(intent, tag))
         }
         endTease()
         goal = null
-        if (airborne) { pendingCmd = intent to tag; return } // she stood on the tease's own edge
+        if (airborne) return defer(DeferredCmd(intent, tag)) // she stood on the tease's own edge
         when (intent) {
             "stay" -> { goIdle(); remainingMs = STAY_MS.toLong() }
             "wander" -> decide()
             "come_closer" -> comeCloser()
             "go_left" -> goSide(-1)
             "go_right" -> goSide(1)
-            "go_up" -> reachable().minByOrNull { it.top }?.let { jumpTo(it) }
-            "go_down" -> startGoal(Goal(null, null, tease = false))
+            "go_up" -> reachable().filter { it.top < feetY }.minByOrNull { it.top }?.let { jumpTo(it) }
+            "go_down" -> startGoal(Goal(null, null))
             "sit" -> startSit()
             "nap" -> startNap(NAP_MS.toLong())
-            "peek" -> startPeek()
+            "peek" -> peekAtScreenSide()
             else -> startTease(intent, tag)
         }
     }
@@ -348,7 +360,8 @@ class Behavior(
         moments.add(Moment("shooed", tz.tag))
         if (mode == Mode.TEASE) {
             tz.phase = Phase.SULK
-            remainingMs = SHOO_SULK_MS.toLong()
+            // the 8 s cap holds: the sulk only uses what is left of it
+            remainingMs = min(SHOO_SULK_MS.toLong(), TEASE_SIT_MAX_MS - tz.onTargetMs).coerceAtLeast(0)
         } else {
             endTease()
             playFor("sulk", SHOO_SULK_MS.toLong())
@@ -381,8 +394,7 @@ class Behavior(
         if (!on) {
             if (mode == Mode.TEASE) hopOff() else endTease()
             goal = null
-            pendingCmd = null
-            pendingPlay = null
+            deferred.clear()
         }
         if (on && !airborne) goIdle()
     }
@@ -391,8 +403,7 @@ class Behavior(
         dragging = true
         tease = null
         goal = null
-        pendingCmd = null
-        pendingPlay = null
+        deferred.clear()
         pendingFell = null
         platform = null
         jumpTarget = null
@@ -531,7 +542,23 @@ class Behavior(
     private fun arriveGoal() {
         val g = goal
         goal = null
-        if (g?.tease == true) enterTease() else goIdle()
+        when (g?.arrive) {
+            Arrive.TEASE -> enterTease()
+            Arrive.PEEK -> {
+                facingLeft = feetX <= screenW / 2f // over the screen side
+                startOneShot("peek")
+            }
+            else -> goIdle()
+        }
+    }
+
+    /** `peek`: to the nearer screen side (along her platform if it reaches it, else on the floor), then peek. */
+    private fun peekAtScreenSide() {
+        val (lo, hi) = walkRange(null)
+        val side = if (feetX <= screenW / 2f) lo else hi
+        val (pLo, pHi) = walkRange(platform)
+        val surface = if (platform != null && (side == pLo || side == pHi)) platform else null
+        startGoal(Goal(surface, side, Arrive.PEEK))
     }
 
     /** The move cannot be finished; a tease plays `happy` instead. */
@@ -556,9 +583,9 @@ class Behavior(
         val cy = screenH / 2f
         val p = usable().minByOrNull { hypot((it.left + it.right) / 2f - cx, it.top - cy) }
         if (p != null && (p == platform || canReach(p))) {
-            startGoal(Goal(p, (p.left + p.right) / 2f, tease = false))
+            startGoal(Goal(p, (p.left + p.right) / 2f))
         } else {
-            startGoal(Goal(null, cx, tease = false))
+            startGoal(Goal(null, cx))
         }
     }
 
@@ -572,7 +599,7 @@ class Behavior(
             val e = end(p)
             if (if (dir < 0) e < bestX else e > bestX) { best = p; bestX = e }
         }
-        startGoal(Goal(best, bestX, tease = false))
+        startGoal(Goal(best, bestX))
     }
 
     // ---- teases ----
@@ -585,7 +612,7 @@ class Behavior(
             ?: return play("happy")
         val tz = Tease(kind, tag, t, surfaceFor(t))
         tease = tz
-        startGoal(Goal(tz.surface, targetX(tz), tease = true))
+        startGoal(Goal(tz.surface, targetX(tz), Arrive.TEASE))
     }
 
     /** The platform the target's top edge belongs to, or one made from its top edge (too small to be a platform). */
@@ -673,7 +700,7 @@ class Behavior(
         if (mode == Mode.JUMP) {
             jumpTarget?.let { if (it !in u) startFall(max(vy, 0f)) }
         } else if (!airborne) {
-            platform?.let { if (it !in u || mode == Mode.TEASE) startFall(0f) }
+            platform?.let { if (it !in u) startFall(0f) }
         }
     }
 
@@ -725,11 +752,17 @@ class Behavior(
         return true
     }
 
-    /** The edge of [p] on side [dir] she can step off from, or null when the screen side is right there. */
+    /**
+     * The edge of [p] on side [dir] she can step off from, or null when the screen side is right
+     * there or the step would only land on a neighbouring edge at about the same height (≤ 8 px down).
+     */
     private fun dropEdge(p: Platform, dir: Int): Float? {
         val (screenLo, screenHi) = walkRange(null)
-        return if (dir < 0) p.left.toFloat().takeIf { it - 1f >= screenLo }
-        else p.right.toFloat().takeIf { it + 1f <= screenHi }
+        val edge = if (dir < 0) p.left.toFloat() else p.right.toFloat()
+        val step = edge + dir
+        if (step < screenLo || step > screenHi) return null
+        val neighbour = usable().any { it != p && step >= it.left && step <= it.right && it.top >= p.top && it.top - p.top <= FOLLOW_TOLERANCE_PX }
+        return if (neighbour) null else edge
     }
 
     private fun arrive() {
@@ -875,12 +908,21 @@ class Behavior(
         // a "fall" that comes straight back down at the same height was no fall (same edge, new tag)
         if (pendingFell != null && feetY != fellFromY) commitFell() else pendingFell = null
         goIdle()
-        val cmd = pendingCmd
-        val one = pendingPlay
-        pendingCmd = null
-        pendingPlay = null
-        if (cmd != null) command(cmd.first, cmd.second) else if (goal != null) plan()
-        if (one != null) playFor(one.first, one.second)
+        val queued = deferred.toList()
+        deferred.clear()
+        if (queued.none { it is DeferredCmd } && goal != null) plan()
+        for (d in queued) {
+            when (d) {
+                is DeferredCmd -> command(d.intent, d.tag)
+                is DeferredPlay -> playFor(d.name, d.ms)
+            }
+        }
+    }
+
+    /** Keeps [d] for landing: it replaces an earlier one of its kind and goes last. */
+    private fun defer(d: Deferred) {
+        deferred.removeAll { it::class == d::class }
+        deferred.add(d)
     }
 
     /** Her platform vanished or moved away: a `fell` moment, unless she lands again at once at the same height. */
