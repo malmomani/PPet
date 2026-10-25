@@ -55,6 +55,10 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
     private var doNotWatch = DoNotWatch(emptySet())
     /** The app last reported to [boundSink] with onApp. */
     private var reportedPkg: String? = null
+    /** The last layout of another app; re-sent (trimmed) while Maya's own window is in front. */
+    private var appLayout: Layout = Layout.EMPTY
+    /** The keyboard top seen by the last rebuild, to tell a keyboard move from Maya's own window moving. */
+    private var lastKeyboardTop: Int? = null
 
     private var lastLayoutMs = 0L
     private var layoutPending = false
@@ -73,7 +77,21 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (ScreenBridge.sink == null) return
+        if (event == null || ScreenBridge.sink == null || !ScreenBridge.active) return
+        // Her own windows move ~30 times a second and her bubble changes: never a reason to re-read
+        // the app. A window of hers appearing (the chat) still counts.
+        if (event.packageName?.toString() == packageName &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            return
+        }
+        // Only window bounds changed (her overlay moving, usually): matters only if the keyboard moved.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED &&
+            event.windowChanges == AccessibilityEvent.WINDOWS_CHANGE_BOUNDS &&
+            !keyboardMoved()
+        ) {
+            return
+        }
         scheduleLayout()
     }
 
@@ -90,7 +108,7 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
     }
 
     override fun refresh() {
-        if (ScreenBridge.sink == null) return
+        if (ScreenBridge.sink == null || !ScreenBridge.active) return
         scheduleLayout()
     }
 
@@ -125,6 +143,8 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         if (sink === boundSink) return
         boundSink = sink
         reportedPkg = null
+        appLayout = Layout.EMPTY
+        lastKeyboardTop = null
         doNotWatch = DoNotWatch(Prefs(this).doNotWatch)
     }
 
@@ -140,19 +160,28 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
 
     private fun rebuild() {
         val sink = ScreenBridge.sink ?: return
+        if (!ScreenBridge.active) return // overlay hidden or screen unusable: refresh() follows when back
         lastLayoutMs = SystemClock.uptimeMillis()
         bindTo(sink)
         try {
             val keyboardTop = keyboardTop()
+            lastKeyboardTop = keyboardTop
             val root = rootInActiveWindow ?: return
             try {
                 val pkg = root.packageName?.toString() ?: return
-                // Maya's own windows (settings, chat) are transparent: the app behind is still "the app".
-                if (pkg != packageName && pkg != reportedPkg) {
+                if (pkg == packageName) {
+                    // Maya's own window (the chat, her settings) is in front: the app behind is still
+                    // "the app" (no onApp) and is not re-read; she keeps its platforms above her window
+                    // and the keyboard.
+                    sink.onLayout(pkg, trimmedAppLayout(root, keyboardTop), keyboardTop)
+                    return
+                }
+                if (pkg != reportedPkg) {
                     reportedPkg = pkg
                     sink.onApp(pkg)
                 }
                 val layout = if (readable(pkg)) layoutOf(collect(root, withText = false).ui, keyboardTop) else Layout.EMPTY
+                appLayout = layout
                 sink.onLayout(pkg, layout, keyboardTop)
             } finally {
                 release(root)
@@ -160,6 +189,23 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         } catch (e: Exception) {
             Log.w(TAG, "could not read the screen: ${e.javaClass.simpleName}")
         }
+    }
+
+    private fun keyboardMoved(): Boolean = try {
+        keyboardTop() != lastKeyboardTop
+    } catch (e: Exception) {
+        true // can't tell: rebuild, which logs the problem
+    }
+
+    /** [appLayout] without the platforms and targets at or below Maya's own window or the keyboard. */
+    private fun trimmedAppLayout(ownRoot: AccessibilityNodeInfo, keyboardTop: Int?): Layout {
+        val r = Rect()
+        ownRoot.getBoundsInScreen(r)
+        val cut = minOf(keyboardTop ?: Int.MAX_VALUE, r.top)
+        return Layout(
+            appLayout.platforms.filter { it.top < cut },
+            appLayout.targets.filter { it.bounds.top < cut },
+        )
     }
 
     private fun layoutOf(ui: List<UiNode>, keyboardTop: Int?): Layout {

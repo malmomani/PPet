@@ -111,6 +111,8 @@ class MayaService : Service() {
     private var screenLayout: Layout = Layout.EMPTY
     private var screenKeyboardTop: Int? = null
     private var screenRestricted = false
+    /** What we last told [ScreenBridge.active]. */
+    private var screenActive = false
     private val glanceTick = object : Runnable {
         override fun run() {
             onGlanceTick()
@@ -245,6 +247,7 @@ class MayaService : Service() {
         overlayBody = body
         overlay = body
         body.show()
+        updateScreenActive()
     }
 
     /** Hide/Show from the notification. With no overlay yet, showing is left to [startOverlay]. */
@@ -257,6 +260,7 @@ class MayaService : Service() {
         }
         val body = overlayBody ?: return
         if (overlayHidden) body.hide() else body.show()
+        updateScreenActive()
     }
 
     // ---- senses ----
@@ -285,8 +289,9 @@ class MayaService : Service() {
             }
             screenSink = sink
             ScreenBridge.sink = sink
+            screenActive = false
+            ScreenBridge.active = false // until the overlay shows (startOverlay -> updateScreenActive)
             main.postDelayed(glanceTick, GLANCE_TICK_MS)
-            ScreenBridge.service?.refresh() // already connected: report the current app and layout now
         }
     }
 
@@ -299,8 +304,12 @@ class MayaService : Service() {
         if (NotificationBridge.sink === notificationSink) NotificationBridge.sink = null
         notificationSink = null
         main.removeCallbacks(glanceTick)
-        if (ScreenBridge.sink === screenSink) ScreenBridge.sink = null
+        if (ScreenBridge.sink === screenSink) {
+            ScreenBridge.sink = null
+            ScreenBridge.active = false
+        }
         screenSink = null
+        screenActive = false
         glanceScheduler = null
         screenPkg = null
     }
@@ -322,9 +331,22 @@ class MayaService : Service() {
         overlay?.setScreenLayout(layout, keyboardTop, screenRestricted)
     }
 
-    /** No teasing while the user types, in a do-not-watch app, or during a call. */
+    /** No teasing while the user types, in a do-not-watch app (or over one), or during a call. */
     private fun isRestricted(pkg: String, keyboardTop: Int?): Boolean =
-        keyboardTop != null || doNotWatch.isBlocked(pkg) || inCall()
+        keyboardTop != null || doNotWatch.isBlocked(pkg) || screenPkg?.let { doNotWatch.isBlocked(it) } == true || inCall()
+
+    /**
+     * Layouts are only worth building while she is visible: overlay up and not hidden, screen on and
+     * unlocked. Becoming visible again asks the accessibility service for a fresh layout.
+     */
+    private fun updateScreenActive() {
+        if (screenSink == null || ScreenBridge.sink !== screenSink) return
+        val active = running && overlayBody != null && !overlayHidden && screenUsable()
+        if (active == screenActive) return
+        screenActive = active
+        ScreenBridge.active = active
+        if (active) ScreenBridge.service?.refresh()
+    }
 
     private fun inCall(): Boolean {
         val mode = getSystemService(AudioManager::class.java)?.mode ?: return false
@@ -348,7 +370,11 @@ class MayaService : Service() {
         }
         val pkg = screenPkg
         val now = SystemClock.elapsedRealtime()
-        val allowed = status == Status.HERE && pkg != null && !doNotWatch.isBlocked(pkg) && screenUsable()
+        // The last layout must be the app's own and current (she is visible, so layouts are being
+        // rebuilt): while Maya's window, system UI or the lock screen is in front, or she is hidden,
+        // the glance stays due instead of being spent on a screen she may not read.
+        val allowed = status == Status.HERE && screenActive && pkg != null && screenLayoutPkg == pkg &&
+            !doNotWatch.isBlocked(pkg) && screenUsable()
         if (!scheduler.poll(now, allowed)) return
         val g = ScreenBridge.service?.glance() ?: return
         if (doNotWatch.isBlocked(g.packageName)) return
@@ -385,9 +411,10 @@ class MayaService : Service() {
                 emit(e)
                 appUsage?.setScreenOn(true)
                 overlay?.setScreenOn(true)
-                if (screenSink != null) ScreenBridge.service?.refresh()
+                updateScreenActive()
             } else {
                 overlay?.setScreenOn(false)
+                updateScreenActive()
                 appUsage?.setScreenOn(false) // emits AppClosed for the current app first
                 emit(e)
             }

@@ -6,8 +6,9 @@ import com.maya.core.Layout
 interface ScreenSink {
     /**
      * The foreground app's platforms and tease targets (Layout.EMPTY when it may not be read:
-     * do-not-watch, Maya herself, system UI, the lock screen), plus the keyboard's top edge in
-     * screen pixels while a keyboard is open.
+     * do-not-watch, system UI, the lock screen), plus the keyboard's top edge in screen pixels while
+     * a keyboard is open. While Maya's own window is in front, [pkg] is Maya's package and the layout
+     * is the last app's, without what lies at or below her window or the keyboard.
      */
     fun onLayout(pkg: String, layout: Layout, keyboardTop: Int?)
 
@@ -40,4 +41,12 @@ object ScreenBridge {
 
     @Volatile
     var service: GlanceSource? = null
+
+    /**
+     * Set by MayaService: false while her overlay is not visible (hidden from the notification, not
+     * shown yet) or the screen is off or locked. The accessibility service rebuilds no layouts
+     * then; MayaService calls [GlanceSource.refresh] when it turns true again.
+     */
+    @Volatile
+    var active: Boolean = false
 }
