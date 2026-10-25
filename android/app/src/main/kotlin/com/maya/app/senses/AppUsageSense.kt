@@ -28,7 +28,7 @@ class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sens
     private val ownPackage: String = ctx.packageName
     private val launchers: Set<String> = findLaunchers()
     private val labels = HashMap<String, String>()
-    private val tracker = AppUsageTracker { pkg -> isIgnored(pkg) }
+    private val tracker = AppUsageTracker(isIgnored = { pkg -> isIgnored(pkg) })
 
     private var emit: ((Event) -> Unit)? = null
     private var started = false

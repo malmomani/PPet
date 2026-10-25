@@ -3,6 +3,7 @@ package com.maya.core
 enum class Gesture { TAP, DRAG, FLING }
 
 const val TAP_MAX_DURATION_MS = 300L
+const val HOLD_TO_TALK_MS = 400L
 const val FLING_MIN_SPEED_PX_PER_S = 2500f
 
 /**
@@ -19,3 +20,7 @@ fun classifyGesture(
     releaseSpeedPxPerS > FLING_MIN_SPEED_PX_PER_S -> Gesture.FLING
     else -> Gesture.DRAG
 }
+
+/** True while a press has stayed put (under touch slop) long enough to start listening. */
+fun isHoldToTalk(distancePx: Float, heldMs: Long, touchSlopPx: Float): Boolean =
+    distancePx < touchSlopPx && heldMs >= HOLD_TO_TALK_MS

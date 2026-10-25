@@ -6,9 +6,13 @@ import java.time.Instant
 /**
  * Turns foreground-app observations into [AppOpened]/[AppClosed] events. A null package means the
  * screen is off or the foreground app is unknown; ignored packages are treated the same as null.
- * Not thread-safe (call from a single thread).
+ * Transparent packages (e.g. our own overlay) are skipped entirely: no events, and the current app
+ * is left unchanged. Not thread-safe (call from a single thread).
  */
-class AppUsageTracker(private val isIgnored: (String) -> Boolean) {
+class AppUsageTracker(
+    private val isIgnored: (String) -> Boolean,
+    private val isTransparent: (String) -> Boolean = { false },
+) {
     private var pkg: String? = null
     private var label: String = ""
     private var since: Instant = Instant.EPOCH
@@ -16,6 +20,7 @@ class AppUsageTracker(private val isIgnored: (String) -> Boolean) {
     fun current(): String? = pkg
 
     fun observe(pkg: String?, label: String?, now: Instant): List<Event> {
+        if (pkg != null && isTransparent(pkg)) return emptyList()
         val next = pkg?.takeUnless(isIgnored)
         val prev = this.pkg
         if (next == prev) return emptyList()

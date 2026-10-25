@@ -31,12 +31,14 @@ data class Hello(
     val clientVersion: String,
     val screenW: Int,
     val screenH: Int,
+    val voiceMode: String = "off",
     override val id: String = newId(),
     override val ts: Instant = Instant.now(),
 ) : Event
 
 data class UserMessage(
     val text: String,
+    val voice: Boolean = false,
     override val id: String = newId(),
     override val ts: Instant = Instant.now(),
 ) : Event
@@ -103,6 +105,8 @@ data class State(val mood: String, val closenessTier: String) : Action
 
 data class Typing(val on: Boolean) : Action
 
+data class Audio(val refId: String, val mime: String, val dataB64: String) : Action
+
 data class ErrorMsg(val code: String, val message: String) : Action
 
 object Protocol {
@@ -119,8 +123,12 @@ object Protocol {
                 put("client_version", e.clientVersion)
                 put("screen_w", e.screenW)
                 put("screen_h", e.screenH)
+                put("voice_mode", e.voiceMode)
             }
-            is UserMessage -> put("text", e.text)
+            is UserMessage -> {
+                put("text", e.text)
+                put("voice", e.voice)
+            }
             is UserTap -> Unit
             is UserDrag -> put("thrown", e.thrown)
             is UserShush -> Unit
@@ -172,6 +180,11 @@ object Protocol {
             }
             "state" -> State(o.str("mood") ?: return null, o.str("closeness_tier") ?: return null)
             "typing" -> Typing(o.bool("on") ?: return null)
+            "audio" -> Audio(
+                o.str("ref_id") ?: return null,
+                o.str("mime") ?: return null,
+                o.str("data_b64") ?: return null,
+            )
             "error" -> ErrorMsg(o.str("code") ?: return null, o.str("message") ?: return null)
             else -> null
         }

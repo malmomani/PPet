@@ -2,6 +2,7 @@ package com.maya.core
 
 import java.time.Instant
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -94,5 +95,32 @@ class ProtocolTest {
         assertEquals("L", a["label"]!!.jsonPrimitive.content)
         val c = Json.parseToJsonElement(Protocol.encode(Charging(true))).jsonObject
         assertEquals("true", c["on"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun encode_user_message_voice() {
+        val v = Json.parseToJsonElement(Protocol.encode(UserMessage("hi", voice = true))).jsonObject
+        assertEquals(true, v["voice"]!!.jsonPrimitive.boolean)
+        val t = Json.parseToJsonElement(Protocol.encode(UserMessage("hi"))).jsonObject
+        assertEquals(false, t["voice"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test fun encode_hello_voice_mode() {
+        val h = Json.parseToJsonElement(Protocol.encode(Hello("0.1.0", 1080, 2340, voiceMode = "replies"))).jsonObject
+        assertEquals("replies", h["voice_mode"]!!.jsonPrimitive.content)
+        val d = Json.parseToJsonElement(Protocol.encode(Hello("0.1.0", 1080, 2340))).jsonObject
+        assertEquals("off", d["voice_mode"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun decode_audio() {
+        assertEquals(
+            Audio("abc", "audio/wav", "UklGRg=="),
+            Protocol.decodeAction("""{"type":"audio","ref_id":"abc","mime":"audio/wav","data_b64":"UklGRg==","id":"1","ts":"2026-10-24T14:00:00Z"}"""),
+        )
+    }
+
+    @Test fun decode_audio_missing_data_is_null() {
+        assertNull(Protocol.decodeAction("""{"type":"audio","ref_id":"abc","mime":"audio/wav"}"""))
+        assertNull(Protocol.decodeAction("""{"type":"audio","ref_id":"abc","data_b64":"UklGRg=="}"""))
+        assertNull(Protocol.decodeAction("""{"type":"audio","mime":"audio/wav","data_b64":"UklGRg=="}"""))
     }
 }

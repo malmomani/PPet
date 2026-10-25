@@ -13,7 +13,7 @@ fun stripMeta(e: Event): Event = when (e) {
 
 class AppUsageTrackerTest {
     @Test fun open_switch_close_sequence() {
-        val t = AppUsageTracker { false }; val t0 = Instant.parse("2026-10-24T14:00:00Z")
+        val t = AppUsageTracker(isIgnored = { false }); val t0 = Instant.parse("2026-10-24T14:00:00Z")
         assertEquals(listOf<Event>(AppOpened("tt", "TikTok")).map(::stripMeta), t.observe("tt", "TikTok", t0).map(::stripMeta))
         assertEquals(emptyList<Event>(), t.observe("tt", "TikTok", t0.plusSeconds(5)))
         assertEquals(
@@ -28,7 +28,7 @@ class AppUsageTrackerTest {
     }
 
     @Test fun ignored_package_closes_previous_without_opening() {
-        val t = AppUsageTracker { it == "bank" }; val t0 = Instant.parse("2026-10-24T14:00:00Z")
+        val t = AppUsageTracker(isIgnored = { it == "bank" }); val t0 = Instant.parse("2026-10-24T14:00:00Z")
         t.observe("tt", "TikTok", t0)
         assertEquals(
             listOf<Event>(AppClosed("tt", "TikTok", 10)).map(::stripMeta),
@@ -38,7 +38,7 @@ class AppUsageTrackerTest {
     }
 
     @Test fun events_carry_now_as_ts_and_open_time_label() {
-        val t = AppUsageTracker { false }; val t0 = Instant.parse("2026-10-24T14:00:00Z")
+        val t = AppUsageTracker(isIgnored = { false }); val t0 = Instant.parse("2026-10-24T14:00:00Z")
         val opened = t.observe("a", "A-old", t0).single()
         assertEquals(t0, opened.ts)
         val out = t.observe("b", "B", t0.plusSeconds(7))
@@ -49,7 +49,7 @@ class AppUsageTrackerTest {
     }
 
     @Test fun negative_duration_clamped_and_fractional_truncated() {
-        val t = AppUsageTracker { false }; val t0 = Instant.parse("2026-10-24T14:00:00Z")
+        val t = AppUsageTracker(isIgnored = { false }); val t0 = Instant.parse("2026-10-24T14:00:00Z")
         t.observe("a", "A", t0)
         assertEquals(0L, (t.observe(null, null, t0.minusSeconds(30)).single() as AppClosed).durationS)
         t.observe("a", "A", t0)
@@ -57,8 +57,20 @@ class AppUsageTrackerTest {
     }
 
     @Test fun current_reflects_tracked_package_and_ignored_is_null() {
-        val t = AppUsageTracker { it == "bank" }; val t0 = Instant.parse("2026-10-24T14:00:00Z")
+        val t = AppUsageTracker(isIgnored = { it == "bank" }); val t0 = Instant.parse("2026-10-24T14:00:00Z")
         t.observe("a", "A", t0); assertEquals("a", t.current())
         t.observe("bank", "Bank", t0.plusSeconds(1)); assertNull(t.current())
+    }
+
+    @Test fun own_package_is_transparent() {
+        val t = AppUsageTracker(isIgnored = { false }, isTransparent = { it == "maya" })
+        val t0 = Instant.parse("2026-10-24T14:00:00Z")
+        t.observe("tt", "TikTok", t0)
+        assertEquals(emptyList<Event>(), t.observe("maya", "Maya", t0.plusSeconds(10)))
+        assertEquals("tt", t.current())
+        assertEquals(
+            listOf<Event>(AppClosed("tt", "TikTok", 60), AppOpened("yt", "YouTube")).map(::stripMeta),
+            t.observe("yt", "YouTube", t0.plusSeconds(60)).map(::stripMeta),
+        )
     }
 }
