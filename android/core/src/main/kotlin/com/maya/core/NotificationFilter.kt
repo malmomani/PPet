@@ -42,7 +42,7 @@ class NotificationFilter(
 
         val sender = clean(n.styleSender) ?: clean(n.title) ?: return null
         val group = if (n.isGroupConversation) clean(n.conversationTitle) else null
-        val app = clean(n.app) ?: n.packageName.take(MAX_LEN)
+        val app = clean(n.app) ?: cap(n.packageName)
 
         val key = Triple(n.packageName, sender, group)
         val last = lastAccepted[key]
@@ -56,7 +56,13 @@ class NotificationFilter(
         return Notification(n.packageName, app, sender, group, kind, ts = n.postedAt)
     }
 
-    private fun clean(s: String?): String? = s?.trim()?.take(MAX_LEN)?.trim()?.ifEmpty { null }
+    private fun clean(s: String?): String? = s?.trim()?.let(::cap)?.trim()?.ifEmpty { null }
+
+    /** At most MAX_LEN chars without splitting an emoji (surrogate pair) in half. */
+    private fun cap(s: String): String {
+        val t = s.take(MAX_LEN)
+        return if (t.isNotEmpty() && t.last().isHighSurrogate()) t.dropLast(1) else t
+    }
 
     private companion object {
         const val MAX_LEN = 100

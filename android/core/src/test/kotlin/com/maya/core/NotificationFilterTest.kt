@@ -84,6 +84,8 @@ class NotificationFilterTest {
         assertEquals(100, n.sender.length)
         assertEquals(100, n.group!!.length)
         assertEquals(100, n.app.length)
+        val emoji = filter().accept(info(title = "S".repeat(99) + "\uD83D\uDE00"))!!
+        assertEquals("S".repeat(99), emoji.sender)
     }
 
     @Test fun dedupe_window() {

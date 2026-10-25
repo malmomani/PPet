@@ -36,6 +36,9 @@ class MayaNotificationListener : NotificationListenerService() {
         val extras: Bundle = n.extras ?: Bundle()
         val pkg: String = sbn.packageName ?: return null
         val messagingStyle = extras.getString(Notification.EXTRA_TEMPLATE) == Notification.MessagingStyle::class.java.name
+        val last = if (messagingStyle) lastMessage(extras) else null
+        // The app reposts the conversation after the user replies inline: their own message is last.
+        if (last != null && isFromUser(last, extras)) return null
         return NotificationInfo(
             packageName = pkg,
             app = labelOf(pkg),
@@ -45,7 +48,7 @@ class MayaNotificationListener : NotificationListenerService() {
             foregroundService = (n.flags and Notification.FLAG_FOREGROUND_SERVICE) != 0,
             messagingStyle = messagingStyle,
             title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString(),
-            styleSender = if (messagingStyle) lastSender(extras) else null,
+            styleSender = last?.senderPerson?.name?.toString(),
             conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString(),
             isGroupConversation = extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false),
             postedAt = Instant.ofEpochMilli(sbn.postTime),
@@ -53,15 +56,23 @@ class MayaNotificationListener : NotificationListenerService() {
     }
 
     /**
-     * The name of the last MessagingStyle message's sender (null when the user sent it). Only the
-     * sender is looked at, never the text. Android 11+; older versions fall back to the title.
+     * The last MessagingStyle message; only its sender is looked at, never its text. Android 11+;
+     * older versions return null and the sender falls back to the title.
      */
     @Suppress("DEPRECATION")
-    private fun lastSender(extras: Bundle): String? {
+    private fun lastMessage(extras: Bundle): Notification.MessagingStyle.Message? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         val bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES) ?: return null
-        val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles)
-        return messages.lastOrNull()?.senderPerson?.name?.toString()
+        return Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles).lastOrNull()
+    }
+
+    /** A null sender means the user; some apps instead repeat the user's own Person. */
+    @Suppress("DEPRECATION")
+    private fun isFromUser(m: Notification.MessagingStyle.Message, extras: Bundle): Boolean {
+        val sender = m.senderPerson ?: return true
+        val user = extras.getParcelable<android.app.Person>(Notification.EXTRA_MESSAGING_PERSON) ?: return false
+        return (sender.key != null && sender.key == user.key) ||
+            (sender.name != null && sender.name.toString() == user.name?.toString())
     }
 
     @Suppress("DEPRECATION")
