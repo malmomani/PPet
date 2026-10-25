@@ -122,8 +122,8 @@ She stays quiet when the phone is on silent or vibrate, when you tap **Shh** or 
 Maya's pictures live in `android/app/src/main/assets/sprites/`:
 
 - `maya.png`: one sheet with one row per animation.
-- `sprites.json`: describes the sheet: `frame_w` and `frame_h` (size of one frame), and for each animation its `row`, number of `frames`, `fps` and whether it `loop`s.
+- `sprites.json`: describes the sheet: `frameWidth`/`frameHeight` (or `frame_w`/`frame_h`), and for each animation its `row`, number of `frames`, `fps` and whether it `loop`s.
 
-To use your own art, replace those two files, keeping the animation names (idle, walk, sit, nap, wave, peek, happy, sulk, surprised). To get the placeholder art back, run this from the repo root: `python android/tools/make_placeholder_sprites.py` (on Windows; use `python3` on Linux/macOS).
+The current art is the 64×64 Maya pack (12 animations); its sources, PSD, palette and preview live in `art/maya/`. To use new art, replace those two files keeping the animation names: idle, walk, sit, nap, wave, peek, happy, sulk, surprised, plus talk (while her voice plays), listen (while you hold her to talk) and think (while she works on a reply). She's drawn at a whole-number scale about 64 dp tall.
 
 Then commit and push (the phone only gets new art from a new APK). The **android** workflow builds one; download and install it as in steps 1 and 2. It installs over the old one and keeps your settings.

@@ -16,9 +16,13 @@ import java.io.File
  * ([onSay]) is played, so audio that arrives late (after a newer line or a reconnect) is dropped,
  * and a new line stops the old clip. Playback is skipped in silent/vibrate ringer modes, during
  * calls, and when audio focus is refused; losing focus stops it. [onStarted] runs when a clip
- * starts. Errors are swallowed: the bubble already shows the text. Main thread only.
+ * starts and [onEnded] when it stops for any reason (finished, interrupted, replaced). Errors are swallowed: the bubble already shows the text. Main thread only.
  */
-class VoicePlayer(context: Context, private val onStarted: () -> Unit = {}) {
+class VoicePlayer(
+    context: Context,
+    private val onStarted: () -> Unit = {},
+    private val onEnded: () -> Unit = {},
+) {
     private val ctx: Context = context.applicationContext
     private val audio: AudioManager? = ctx.getSystemService(AudioManager::class.java)
     private val file = File(ctx.cacheDir, FILE_NAME)
@@ -99,6 +103,7 @@ class VoicePlayer(context: Context, private val onStarted: () -> Unit = {}) {
         }
         p.release()
         abandonFocus()
+        onEnded()
     }
 
     fun release() {

@@ -101,4 +101,24 @@ class BehaviorTest {
         val b = Behavior(1000, 100, Random(1), 100f)
         b.dragStart(); b.play("wave"); assertEquals("surprised", b.animation)
     }
+
+    @Test fun pose_holds_until_cleared_and_stops_walking() {
+        val b = Behavior(1000, 100, Random(7), 300f)
+        b.play("walk"); val x0 = b.x
+        b.setPose("talk")
+        assertEquals("talk", b.animation)
+        b.tick(60_000); assertEquals("talk", b.animation); assertEquals(x0, b.x)
+        b.play("happy"); assertEquals("talk", b.animation) // a pose outranks one-shots
+        b.setPose(null); assertEquals("idle", b.animation)
+    }
+
+    @Test fun nap_and_drag_outrank_pose() {
+        val b = Behavior(1000, 100, Random(1), 100f)
+        b.setPose("listen")
+        b.dragStart(); assertEquals("surprised", b.animation)
+        b.dragEnd(10f); assertEquals("listen", b.animation)
+        b.setConnected(false); assertEquals("nap", b.animation)
+        b.setConnected(true); assertEquals("listen", b.animation)
+    }
 }
+

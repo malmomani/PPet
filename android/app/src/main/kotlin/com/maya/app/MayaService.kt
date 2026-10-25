@@ -43,6 +43,9 @@ interface OverlayHook {
 
     /** One of her spoken replies started playing. */
     fun onVoiceStarted()
+
+    /** Her spoken reply finished or was stopped. */
+    fun onVoiceEnded()
 }
 
 /**
@@ -144,7 +147,11 @@ class MayaService : Service() {
         running = true
         status = Status.NAPPING
         doNotWatch = DoNotWatch(prefs.doNotWatch)
-        voicePlayer = VoicePlayer(this) { overlay?.onVoiceStarted() }
+        voicePlayer = VoicePlayer(
+            this,
+            onStarted = { overlay?.onVoiceStarted() },
+            onEnded = { overlay?.onVoiceEnded() },
+        )
         val conn = BrainConnection(url, prefs.voiceMode, ::onAction, ::onConnected, ::onAuthError, ::screenSize)
         connection = conn
         conn.start()

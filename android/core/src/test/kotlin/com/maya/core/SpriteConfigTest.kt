@@ -22,4 +22,12 @@ class SpriteConfigTest {
     @Test fun malformed_json_is_an_illegal_argument() {
         assertThrows(IllegalArgumentException::class.java) { parseSpriteConfig("not json") }
     }
+
+    @Test fun accepts_camel_case_keys_and_ignores_extras() {
+        val c = parseSpriteConfig("""{"name":"Maya","frameWidth":64,"frameHeight":64,"columns":8,
+            "anchor":{"x":32,"y":60},"animations":{"idle":{"row":0,"frames":4,"fps":4,"loop":true,
+            "onComplete":"repeat","cells":[{"x":0,"y":0,"w":64,"h":64}]}}}""")
+        assertEquals(64, c.frameW); assertEquals(64, c.frameH); assertEquals(AnimSpec(0, 4, 4, true), c.spec("idle"))
+    }
 }
+

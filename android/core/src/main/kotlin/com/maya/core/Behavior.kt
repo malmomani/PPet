@@ -12,6 +12,9 @@ const val ONE_SHOT_MS = 2500
 const val WALK_CHANCE_PCT = 40
 const val SIT_CHANCE_PCT = 25 // remainder (35 %) stays idle
 
+/** Sustained poses the app holds while something is going on (her voice, listening, thinking). */
+val BODY_POSES = listOf("talk", "listen", "think")
+
 /** Animations that `play` shows for [ONE_SHOT_MS] and then return to idle. */
 private val ONE_SHOTS = setOf("wave", "peek", "happy", "sulk", "surprised")
 
@@ -36,6 +39,7 @@ class Behavior(
     private var connected = true
     private var dragging = false
     private var direction = -1 // -1 = left, +1 = right
+    private var pose: String? = null
 
     var x: Float = maxX
         private set
@@ -48,6 +52,7 @@ class Behavior(
         get() = when {
             !connected -> "nap"
             dragging -> "surprised"
+            pose != null -> pose!!
             else -> when (mode) {
                 Mode.IDLE -> "idle"
                 Mode.WALK -> "walk"
@@ -62,7 +67,7 @@ class Behavior(
     }
 
     fun tick(dtMs: Long) {
-        if (!connected || dragging || dtMs <= 0) return
+        if (!connected || dragging || pose != null || dtMs <= 0) return
         if (mode == Mode.WALK) walk(dtMs)
         remainingMs -= dtMs
         if (remainingMs > 0) return
@@ -79,6 +84,16 @@ class Behavior(
             name == "idle" -> goIdle()
             // unknown names are ignored
         }
+    }
+
+    /**
+     * Holds [name] (e.g. "talk" while her voice plays) until cleared with null; she stands still
+     * meanwhile. Disconnected napping and being dragged still take precedence.
+     */
+    fun setPose(name: String?) {
+        if (name == pose) return
+        pose = name
+        if (name == null) goIdle()
     }
 
     fun setConnected(on: Boolean) {

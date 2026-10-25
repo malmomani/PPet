@@ -21,6 +21,7 @@ data class SpriteConfig(
 
 /**
  * Parses `{"frame_w":32,"frame_h":32,"animations":{"idle":{"row":0,"frames":4,"fps":4,"loop":true},...}}`.
+ * `frameWidth`/`frameHeight` are accepted for `frame_w`/`frame_h`; other keys are ignored.
  * Throws [IllegalArgumentException] on malformed input, a missing `idle`, or a non-positive value.
  */
 fun parseSpriteConfig(json: String): SpriteConfig {
@@ -29,8 +30,8 @@ fun parseSpriteConfig(json: String): SpriteConfig {
     } catch (e: Exception) {
         throw IllegalArgumentException("invalid sprite config: ${e.message}", e)
     }
-    val frameW = root.positiveInt("frame_w")
-    val frameH = root.positiveInt("frame_h")
+    val frameW = root.positiveInt(if ("frame_w" in root) "frame_w" else "frameWidth")
+    val frameH = root.positiveInt(if ("frame_h" in root) "frame_h" else "frameHeight")
     val anims = try {
         root["animations"]?.jsonObject
     } catch (e: Exception) {

@@ -1,0 +1,817 @@
+{
+  "passed": true,
+  "canvas": {
+    "width": 512,
+    "height": 768
+  },
+  "frameSize": {
+    "width": 64,
+    "height": 64
+  },
+  "occupiedFrames": 43,
+  "uniqueVisibleColors": 16,
+  "alphaValues": [
+    0,
+    255
+  ],
+  "colorPaletteMatchesBrief": true,
+  "unusedCellsTransparent": true,
+  "rowOrderMatchesBrief": true,
+  "frameCountsAndFpsMatchBrief": true,
+  "pngColorType": 6,
+  "hasIccProfile": false,
+  "rows": [
+    {
+      "row": 0,
+      "name": "idle",
+      "occupiedFrames": 4,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1415,
+          "bounds": {
+            "minX": 7,
+            "minY": 15,
+            "maxX": 52,
+            "maxY": 60
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1378,
+          "bounds": {
+            "minX": 5,
+            "minY": 15,
+            "maxX": 51,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 1348,
+          "bounds": {
+            "minX": 4,
+            "minY": 15,
+            "maxX": 49,
+            "maxY": 60
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 1368,
+          "bounds": {
+            "minX": 7,
+            "minY": 15,
+            "maxX": 51,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 1,
+      "name": "walk",
+      "occupiedFrames": 6,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1391,
+          "bounds": {
+            "minX": 3,
+            "minY": 12,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1401,
+          "bounds": {
+            "minX": 3,
+            "minY": 12,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 1420,
+          "bounds": {
+            "minX": 3,
+            "minY": 12,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 1388,
+          "bounds": {
+            "minX": 3,
+            "minY": 12,
+            "maxX": 49,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 4,
+          "pixels": 1448,
+          "bounds": {
+            "minX": 2,
+            "minY": 12,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 5,
+          "pixels": 1411,
+          "bounds": {
+            "minX": 2,
+            "minY": 12,
+            "maxX": 49,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 2,
+      "name": "sit",
+      "occupiedFrames": 2,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1325,
+          "bounds": {
+            "minX": 7,
+            "minY": 21,
+            "maxX": 53,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1337,
+          "bounds": {
+            "minX": 7,
+            "minY": 21,
+            "maxX": 55,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 3,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 3,
+      "name": "nap",
+      "occupiedFrames": 2,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1011,
+          "bounds": {
+            "minX": 7,
+            "minY": 33,
+            "maxX": 59,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1041,
+          "bounds": {
+            "minX": 6,
+            "minY": 34,
+            "maxX": 59,
+            "maxY": 60
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 3,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 4,
+      "name": "wave",
+      "occupiedFrames": 6,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1429,
+          "bounds": {
+            "minX": 7,
+            "minY": 13,
+            "maxX": 52,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1442,
+          "bounds": {
+            "minX": 9,
+            "minY": 13,
+            "maxX": 53,
+            "maxY": 60
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 1424,
+          "bounds": {
+            "minX": 7,
+            "minY": 13,
+            "maxX": 53,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 1459,
+          "bounds": {
+            "minX": 5,
+            "minY": 12,
+            "maxX": 51,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 4,
+          "pixels": 1479,
+          "bounds": {
+            "minX": 5,
+            "minY": 12,
+            "maxX": 51,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 5,
+          "pixels": 1429,
+          "bounds": {
+            "minX": 7,
+            "minY": 13,
+            "maxX": 52,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 5,
+      "name": "peek",
+      "occupiedFrames": 4,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 616,
+          "bounds": {
+            "minX": 8,
+            "minY": 43,
+            "maxX": 51,
+            "maxY": 62
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 695,
+          "bounds": {
+            "minX": 12,
+            "minY": 41,
+            "maxX": 50,
+            "maxY": 62
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 997,
+          "bounds": {
+            "minX": 5,
+            "minY": 35,
+            "maxX": 59,
+            "maxY": 63
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 1076,
+          "bounds": {
+            "minX": 10,
+            "minY": 31,
+            "maxX": 58,
+            "maxY": 62
+          }
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 6,
+      "name": "happy",
+      "occupiedFrames": 4,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1403,
+          "bounds": {
+            "minX": 7,
+            "minY": 12,
+            "maxX": 51,
+            "maxY": 58
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1459,
+          "bounds": {
+            "minX": 9,
+            "minY": 6,
+            "maxX": 56,
+            "maxY": 53
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 1506,
+          "bounds": {
+            "minX": 7,
+            "minY": 13,
+            "maxX": 56,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 1499,
+          "bounds": {
+            "minX": 10,
+            "minY": 13,
+            "maxX": 58,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 7,
+      "name": "sulk",
+      "occupiedFrames": 2,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1414,
+          "bounds": {
+            "minX": 3,
+            "minY": 15,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1384,
+          "bounds": {
+            "minX": 3,
+            "minY": 15,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 3,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 8,
+      "name": "surprised",
+      "occupiedFrames": 2,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1324,
+          "bounds": {
+            "minX": 7,
+            "minY": 17,
+            "maxX": 55,
+            "maxY": 56
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1400,
+          "bounds": {
+            "minX": 4,
+            "minY": 19,
+            "maxX": 58,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 3,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 9,
+      "name": "talk",
+      "occupiedFrames": 3,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1482,
+          "bounds": {
+            "minX": 4,
+            "minY": 13,
+            "maxX": 52,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1439,
+          "bounds": {
+            "minX": 3,
+            "minY": 13,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 1478,
+          "bounds": {
+            "minX": 3,
+            "minY": 13,
+            "maxX": 51,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 10,
+      "name": "listen",
+      "occupiedFrames": 4,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1420,
+          "bounds": {
+            "minX": 3,
+            "minY": 14,
+            "maxX": 51,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1391,
+          "bounds": {
+            "minX": 2,
+            "minY": 15,
+            "maxX": 49,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 1369,
+          "bounds": {
+            "minX": 2,
+            "minY": 15,
+            "maxX": 49,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 1382,
+          "bounds": {
+            "minX": 2,
+            "minY": 15,
+            "maxX": 50,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    },
+    {
+      "row": 11,
+      "name": "think",
+      "occupiedFrames": 4,
+      "cells": [
+        {
+          "column": 0,
+          "pixels": 1149,
+          "bounds": {
+            "minX": 8,
+            "minY": 12,
+            "maxX": 44,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 1,
+          "pixels": 1171,
+          "bounds": {
+            "minX": 9,
+            "minY": 6,
+            "maxX": 44,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 2,
+          "pixels": 1172,
+          "bounds": {
+            "minX": 8,
+            "minY": 12,
+            "maxX": 48,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 3,
+          "pixels": 1162,
+          "bounds": {
+            "minX": 8,
+            "minY": 12,
+            "maxX": 47,
+            "maxY": 59
+          }
+        },
+        {
+          "column": 4,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 5,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 6,
+          "pixels": 0,
+          "bounds": null
+        },
+        {
+          "column": 7,
+          "pixels": 0,
+          "bounds": null
+        }
+      ]
+    }
+  ],
+  "editablePsd": {
+    "width": 512,
+    "height": 768,
+    "frameLayers": 43,
+    "compositeMatchesNativePng": true
+  },
+  "animatedPreview": {
+    "width": 720,
+    "height": 1104,
+    "frames": 32,
+    "cycleDurationMs": 4000
+  },
+  "individualFrameFiles": 43
+}

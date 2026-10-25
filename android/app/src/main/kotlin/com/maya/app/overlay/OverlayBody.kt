@@ -63,7 +63,8 @@ class OverlayBody(
     private val ctx: Context = overlayContext(context)
     private val wm: WindowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val density = ctx.resources.displayMetrics.density
-    private val scale = (density * 1.4f).roundToInt().coerceIn(3, 6)
+    // Integer nearest-neighbour scale so a frame is about SPRITE_DP tall (64 px art -> x3 at density 3).
+    private val scale = (SPRITE_DP * density / sheet.frameH).roundToInt().coerceAtLeast(1)
     private val sheet = SpriteSheet(ctx.assets)
     private val spriteSize = sheet.frameW * scale
     private val spriteH = sheet.frameH * scale
@@ -110,6 +111,8 @@ class OverlayBody(
     private var holdFired = false
     /** A voice session is running (from listening start until its result arrives). */
     private var listening = false
+    private var speaking = false // her voice is playing
+    private var thinking = false // the brain is working on a reply
     private val holdRunnable = Runnable { onHoldTimer() }
     private val listenCap = Runnable { if (listening) voice.stop() }
     /** The mic is capturing in the current session ([VoiceInput.Listener.onReady] arrived). */
@@ -153,28 +156,56 @@ class OverlayBody(
         when (a) {
             is Animate -> behavior.play(a.name)
             // While listening the bubble shows what she hears; replies come after it.
-            is Say -> if (bubbleHeld()) {
-                deferredSay = a
-                deferredTyping = null // the line replaces the dots that came before it
-            } else if (visible) {
-                bubble.say(a.text, a.bubbleMs)
+            is Say -> {
+                thinking = false
+                updatePose()
+                if (bubbleHeld()) {
+                    deferredSay = a
+                    deferredTyping = null // the line replaces the dots that came before it
+                } else if (visible) {
+                    bubble.say(a.text, a.bubbleMs)
+                }
             }
-            is Typing -> if (bubbleHeld()) deferredTyping = a.on else if (visible) bubble.typing(a.on)
+            is Typing -> {
+                thinking = a.on
+                updatePose()
+                if (bubbleHeld()) deferredTyping = a.on else if (visible) bubble.typing(a.on)
+            }
             is State -> Unit // nothing visible in v1
             is Audio -> Unit // played by the service's VoicePlayer
             is ErrorMsg -> Unit // the service handles auth errors
         }
     }
 
-    /** Her voice started playing: a little happy bounce (no lip-sync in v1). */
+    /** Her voice started playing: she talks (mouth frames loop) until it ends. */
     override fun onVoiceStarted() {
-        behavior.play("happy")
+        speaking = true
+        updatePose()
+    }
+
+    override fun onVoiceEnded() {
+        speaking = false
+        updatePose()
+    }
+
+    /** Sustained pose from what's going on: listening beats talking beats thinking. */
+    private fun updatePose() {
+        behavior.setPose(
+            when {
+                listening -> "listen"
+                speaking -> "talk"
+                thinking && connected -> "think"
+                else -> null
+            },
+        )
     }
 
     override fun setConnected(on: Boolean) {
         connected = on
         behavior.setConnected(on)
         if (!on) {
+            thinking = false
+            updatePose()
             deferredTyping = null
             bubble.typing(false) // a dropped link would otherwise leave "…" up forever
             chat.close() // messages typed now would be lost
@@ -399,6 +430,7 @@ class OverlayBody(
         }
         chat.close()
         listening = true
+        updatePose()
         micReady = false
         // Lines still waiting from the last session keep waiting until this one ends.
         main.removeCallbacks(releaseBubble)
@@ -414,6 +446,7 @@ class OverlayBody(
     private fun endListening() {
         if (!listening) return
         listening = false
+        updatePose()
         main.removeCallbacks(listenCap)
         onListening(false)
     }
@@ -571,6 +604,7 @@ class OverlayBody(
         behavior.setConnected(connected)
         behavior.dragEnd(oldX.coerceIn(0, maxX()).toFloat())
         if (dragging) behavior.dragStart()
+        updatePose() // the new body starts without the old one's pose
         val y = if (wasAtRest) restingY() else params.y.coerceIn(0, maxY())
         moveWindow(behavior.x.roundToInt(), y)
     }
@@ -589,6 +623,7 @@ class OverlayBody(
         const val MAX_DT_MS = 250L
         const val SIZE_CHECK_MS = 1000L
         const val SPEED_DP_PER_S = 40f
+        const val SPRITE_DP = 64f
         const val BOTTOM_MARGIN_DP = 48f
         const val THROW_MS = 350L
         const val THROW_SECONDS = 0.25f

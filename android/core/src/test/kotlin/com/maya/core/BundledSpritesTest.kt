@@ -12,10 +12,11 @@ class BundledSpritesTest {
 
     @Test fun bundled_config_covers_all_animations_and_matches_png() {
         val config = parseSpriteConfig(File(dir, "sprites.json").readText())
-        ANIMATIONS.forEach { assertTrue("missing $it", it in config.animations) }
+        (ANIMATIONS + BODY_POSES).forEach { assertTrue("missing $it", it in config.animations) }
         val png = ImageIO.read(File(dir, "maya.png"))
         assertNotNull(png)
-        assertEquals(config.frameH * 9, png.height)
+        assertEquals(64, config.frameW)
+        assertEquals(config.frameH * (config.animations.values.maxOf { it.row } + 1), png.height)
         assertTrue(png.width >= config.frameW * config.animations.values.maxOf { it.frames })
         ANIMATIONS.forEachIndexed { i, name -> assertEquals("row of $name", i, config.spec(name).row) }
     }
