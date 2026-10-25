@@ -97,7 +97,8 @@ data class OfflineSummary(
 
 sealed interface Action
 
-data class Say(val text: String, val bubbleMs: Long) : Action
+/** [id] is the brain message id (matched by a later [Audio.refId]); "" when absent. */
+data class Say(val text: String, val bubbleMs: Long, val id: String = "") : Action
 
 data class Animate(val name: String) : Action
 
@@ -173,7 +174,11 @@ object Protocol {
 
     private fun decodeObject(o: JsonObject): Action? {
         return when (o.str("type")) {
-            "say" -> Say(o.str("text") ?: return null, o.long("bubble_ms") ?: return null)
+            "say" -> Say(
+                o.str("text") ?: return null,
+                o.long("bubble_ms") ?: return null,
+                o.str("id") ?: "",
+            )
             "animate" -> {
                 val name = o.str("name") ?: return null
                 Animate(if (name in ANIMATIONS) name else "idle")

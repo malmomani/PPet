@@ -50,9 +50,10 @@ class ProtocolTest {
 
     @Test fun decode_actions() {
         assertEquals(
-            Say("yo", 6000),
+            Say("yo", 6000, "1"),
             Protocol.decodeAction("""{"type":"say","text":"yo","bubble_ms":6000,"id":"1","ts":"2026-10-24T14:00:00Z"}"""),
         )
+        assertEquals(Say("yo", 6000, ""), Protocol.decodeAction("""{"type":"say","text":"yo","bubble_ms":6000}"""))
         assertEquals(Animate("wave"), Protocol.decodeAction("""{"type":"animate","name":"wave"}"""))
         assertEquals(
             State("happy", "friend"),
