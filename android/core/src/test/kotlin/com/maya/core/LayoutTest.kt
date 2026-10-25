@@ -216,6 +216,50 @@ class LayoutTest {
         assertEquals((10 until 40).map { 100 + it * 10 }.reversed(), capped.map { it.right })
     }
 
+    @Test fun long_card_text_not_tagged() {
+        val card = node(Box(0, 500, 500, 700), clickable = true, text = "Video: best play of the day")
+        assertNull(tagOf(card))
+        assertTrue(build(listOf(card)).targets.isEmpty())
+        // more than 4 words, even if short in chars
+        assertNull(tagOf(node(Box(0, 0, 10, 10), text = "a b c d play")))
+        assertEquals("play", tagOf(node(Box(0, 0, 10, 10), text = "a b c play")))
+        // more than 24 chars in a description
+        assertNull(tagOf(node(Box(0, 0, 10, 10), description = "Play the whole playlist now")))
+        assertEquals("play", tagOf(node(Box(0, 0, 10, 10), description = "  Play  ")))
+        // view-id matching is unchanged
+        assertEquals("play", tagOf(node(Box(0, 0, 10, 10), viewId = "x:id/a_b_c_d_e_play", text = "Video: best of the day")))
+    }
+
+    @Test fun wide_node_not_target() {
+        val wide = node(Box(0, 500, 600, 600), clickable = true, text = "Send") // 600 > 0.5 * 1080
+        val ok = node(Box(0, 700, 540, 800), clickable = true, text = "Send") // exactly half
+        val layout = build(listOf(wide, ok))
+        assertEquals(listOf(Target("send", Box(0, 700, 540, 800))), layout.targets)
+        // the wide one is still a plain platform, without a tag
+        assertEquals(listOf(null, "send"), layout.platforms.sortedBy { it.top }.map { it.tag })
+    }
+
+    @Test fun tagged_platforms_survive_cap() {
+        val many = (0 until 40).map { i ->
+            node(Box(0, 300 + i * 20, 200 + i * 10, 310 + i * 20), clickable = true)
+        }
+        val narrowSend = node(Box(0, 1500, 30, 1560), clickable = true, text = "Send")
+        val capped = build(many + narrowSend).platforms
+        assertEquals(30, capped.size)
+        assertEquals("send", capped.first().tag)
+        assertEquals(1, capped.count { it.tag != null })
+        // the rest are the 29 widest
+        assertEquals((11 until 40).map { 200 + it * 10 }.reversed(), capped.drop(1).map { it.right })
+    }
+
+    @Test fun arabic_diacritics_match() {
+        val b = Box(0, 0, 10, 10)
+        assertEquals("send", tagOf(node(b, text = "إِرْسَال")))
+        assertEquals("like", tagOf(node(b, description = "أَعْجَبَنِي")))
+        assertEquals("search", tagOf(node(b, text = "بَحْث")))
+        assertEquals("follow", tagOf(node(b, text = "مُتَابَعَة")))
+    }
+
     @Test fun empty_layout() {
         assertEquals(Layout(emptyList(), emptyList()), Layout.EMPTY)
         assertEquals(Layout.EMPTY, build(emptyList()))
