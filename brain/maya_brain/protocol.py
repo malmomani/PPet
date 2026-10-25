@@ -1,6 +1,7 @@
 """JSON messages exchanged with the phone app over WebSocket."""
 
 import json
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
@@ -31,6 +32,27 @@ ANIMATIONS: tuple[str, ...] = (
 
 VOICE_MODES: tuple[str, ...] = ("off", "replies", "always")
 NOTIFICATION_KINDS: tuple[str, ...] = ("message", "email", "call")
+TEASE_TARGETS: tuple[str, ...] = ("send", "like", "play", "search", "share", "comment", "follow")
+MOVE_INTENTS: tuple[str, ...] = (
+    "stay",
+    "wander",
+    "come_closer",
+    "go_left",
+    "go_right",
+    "go_up",
+    "go_down",
+    "sit",
+    "nap",
+    "peek",
+    "sit_on",
+    "poke",
+)
+TEASE_INTENTS: tuple[str, ...] = ("sit_on", "poke")  # the moves that need a target
+BODY_DOING: tuple[str, ...] = ("idle", "walk", "sit", "perch", "jump", "fall", "nap", "peek", "tease", "dragged")
+BODY_WHERE: tuple[str, ...] = ("floor", "platform", "target")
+
+GLANCE_MAX_LINES = 40
+GLANCE_MAX_LINE = 200
 
 
 def _new_id() -> str:
@@ -120,6 +142,91 @@ class NotificationEvent(_Message):
         return v if isinstance(v, str) and v in NOTIFICATION_KINDS else "message"
 
 
+def _known_target(v: object) -> str | None:
+    return v if isinstance(v, str) and v in TEASE_TARGETS else None
+
+
+def _unit(v: object, default: float) -> float:
+    """A fraction of the screen: clamped to 0..1 and rounded to 2 decimals; junk falls back to `default`."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or math.isnan(v):
+        return default
+    return round(min(1.0, max(0.0, float(v))), 2)
+
+
+class GlanceEvent(_Message):
+    """The visible text of the app the user is in, and which tease targets it shows. Never queued offline."""
+
+    type: Literal["glance"] = "glance"
+    package: str
+    app: str = Field(min_length=1, max_length=100)
+    lines: list[str] = Field(default_factory=list)
+    targets: list[str] = Field(default_factory=list)
+
+    @field_validator("lines", mode="before")
+    @classmethod
+    def _tidy_lines(cls, v: object) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        lines = [line.strip() for line in v if isinstance(line, str)]
+        return [line[:GLANCE_MAX_LINE] for line in lines if line][:GLANCE_MAX_LINES]
+
+    @field_validator("targets", mode="before")
+    @classmethod
+    def _known_targets(cls, v: object) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [t for t in dict.fromkeys(x for x in v if isinstance(x, str)) if t in TEASE_TARGETS]
+
+
+class BodyEvent(_Message):
+    """What Maya's body is doing and where (feet, as fractions of the screen). Never queued offline."""
+
+    type: Literal["body"] = "body"
+    doing: Literal[*BODY_DOING] = "idle"
+    where: Literal[*BODY_WHERE] = "floor"
+    target: Literal[*TEASE_TARGETS] | None = None
+    x: float = 0.5
+    y: float = 1.0
+
+    @field_validator("doing", mode="before")
+    @classmethod
+    def _known_doing(cls, v: object) -> object:
+        return v if isinstance(v, str) and v in BODY_DOING else "idle"
+
+    @field_validator("where", mode="before")
+    @classmethod
+    def _known_where(cls, v: object) -> object:
+        return v if isinstance(v, str) and v in BODY_WHERE else "floor"
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _known_target(cls, v: object) -> str | None:
+        return _known_target(v)
+
+    @field_validator("x", mode="before")
+    @classmethod
+    def _unit_x(cls, v: object) -> float:
+        return _unit(v, 0.5)
+
+    @field_validator("y", mode="before")
+    @classmethod
+    def _unit_y(cls, v: object) -> float:
+        return _unit(v, 1.0)
+
+
+class BodyMomentEvent(_Message):
+    """Something happened to her body: she fell (her platform vanished) or the user shooed her off a target."""
+
+    type: Literal["body_moment"] = "body_moment"
+    kind: Literal["fell", "shooed"]
+    target: Literal[*TEASE_TARGETS] | None = None
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _known_target(cls, v: object) -> str | None:
+        return _known_target(v)
+
+
 class OfflineSummary(_Message):
     type: Literal["offline_summary"] = "offline_summary"
     events: list[dict]
@@ -137,6 +244,9 @@ Event = Annotated[
     | Screen
     | Charging
     | NotificationEvent
+    | GlanceEvent
+    | BodyEvent
+    | BodyMomentEvent
     | OfflineSummary,
     Field(discriminator="type"),
 ]
@@ -154,6 +264,9 @@ _EVENT_TYPES = frozenset(
         "screen",
         "charging",
         "notification",
+        "glance",
+        "body",
+        "body_moment",
         "offline_summary",
     }
 )
@@ -201,6 +314,12 @@ class State(_Message):
     closeness_tier: str
 
 
+class Move(_Message):
+    type: Literal["move"] = "move"
+    intent: Literal[*MOVE_INTENTS]
+    target: Literal[*TEASE_TARGETS] | None = None
+
+
 class Typing(_Message):
     type: Literal["typing"] = "typing"
     on: bool
@@ -220,6 +339,6 @@ class Error(_Message):
 
 
 Action = Annotated[
-    Say | Animate | State | Typing | Audio | Error,
+    Say | Animate | State | Move | Typing | Audio | Error,
     Field(discriminator="type"),
 ]

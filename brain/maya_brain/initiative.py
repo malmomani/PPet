@@ -9,7 +9,9 @@ from .db import get_state, set_state
 from .protocol import (
     AppClosed,
     AppOpened,
+    BodyMomentEvent,
     Charging,
+    GlanceEvent,
     Hello,
     NotificationEvent,
     Screen,
@@ -36,8 +38,13 @@ LATE_NIGHT_BUMP = 10.0
 LONG_SESSION_BUMP = 15.0
 NOTIFICATION_BUMP = 8.0
 NOTIFICATION_GAP = timedelta(seconds=600)  # per sender
+GLANCE_BUMP = 4.0
+GLANCE_GAP = timedelta(seconds=300)  # across all apps
+FELL_BUMP = 6.0
+SHOOED_BUMP = 10.0
 
-# Events that mean the user is actually around. Hello, Charging, NotificationEvent and OfflineSummary are not.
+# Events that mean the user is actually around. Hello, Charging, NotificationEvent, GlanceEvent, BodyEvent,
+# BodyMomentEvent and OfflineSummary are not.
 USER_ACTIVITY = (AppOpened, AppClosed, Screen, UserMessage, UserTap, UserDrag, UserShush)
 
 
@@ -65,6 +72,12 @@ def _notification_reason(event: NotificationEvent) -> str:
     return f"{event.sender} just messaged on {event.app}"
 
 
+def _shooed_reason(event: BodyMomentEvent) -> str:
+    if event.target:
+        return f"the user just shooed you off the {event.target} button"
+    return "the user just shooed you away"
+
+
 class Initiative:
     def __init__(self, cfg: InitiativeConfig, db: sqlite3.Connection, clock: Clock) -> None:
         self.cfg = cfg
@@ -87,6 +100,7 @@ class Initiative:
         self._late_pending: bool = s.get("late_pending", False)
         self._late_hour: str | None = s.get("late_hour")
         self._notified: dict[str, str] = s.get("notified", {})  # sender -> when they last bumped the urge
+        self._glanced: str | None = s.get("glanced")  # when a glance last bumped the urge
 
     # ---- persistence ----
 
@@ -109,6 +123,7 @@ class Initiative:
                 "late_pending": self._late_pending,
                 "late_hour": self._late_hour,
                 "notified": self._notified,
+                "glanced": self._glanced,
             },
         )
 
@@ -175,6 +190,16 @@ class Initiative:
             if event.sender not in self._notified:
                 self._notified[event.sender] = now.isoformat()
                 bumps.append((NOTIFICATION_BUMP, _notification_reason(event)))
+        elif isinstance(event, GlanceEvent):
+            glanced = _dt(self._glanced)
+            if glanced is None or now - glanced >= GLANCE_GAP:
+                self._glanced = now.isoformat()
+                bumps.append((GLANCE_BUMP, f"something new on screen in {event.app}"))
+        elif isinstance(event, BodyMomentEvent):
+            if event.kind == "fell":
+                bumps.append((FELL_BUMP, "you just fell because the screen moved under you"))
+            else:
+                bumps.append((SHOOED_BUMP, _shooed_reason(event)))
 
         if not in_window(now.time(), LATE_NIGHT_START, LATE_NIGHT_END):
             self._late_pending = False  # a stale trigger from an earlier night must not linger

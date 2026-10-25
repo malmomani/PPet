@@ -25,10 +25,14 @@ from .protocol import (
     AppClosed,
     AppOpened,
     Audio,
+    BodyEvent,
+    BodyMomentEvent,
     Charging,
     Error,
     Event,
+    GlanceEvent,
     Hello,
+    Move,
     NotificationEvent,
     Say,
     Screen,
@@ -54,6 +58,10 @@ HELP = """Commands:
   /app <Label>      open an app (e.g. /app TikTok)
   /close            close the current app (reports how long it was open)
   /notify <sender> [app] [group]  someone messaged the user (app defaults to WhatsApp)
+  /glance <app> <line>[ | <line>...] [targets=send,like]  what is on the user's screen (targets: tease tags)
+  /body <doing> [where] [target]  report her body (doing: idle walk sit perch jump fall nap peek tease dragged;
+                    where: floor platform target)
+  /moment fell|shooed [target]  her body: she fell, or the user shooed her off a target
   /screen on|off    turn the phone screen on or off
   /charge on|off    plug in or unplug the charger
   /time HH:MM       jump the virtual clock forward to the next HH:MM (today or tomorrow)
@@ -69,6 +77,7 @@ HELP = """Commands:
   /help             this list
   /quit             leave"""
 
+_TARGETS_RE = re.compile(r"(?:^|\s)targets=(\S*)\s*$")
 _SKIP_RE = re.compile(r"^(\d+)([mhd])$")
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
 _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
@@ -104,6 +113,26 @@ def parse_command(line: str, now: datetime, voice: bool = False) -> tuple[str, o
             return help_
         app = app or "WhatsApp"
         return "event", NotificationEvent(package=app.lower(), app=app[:100], sender=sender[:100], group=group and group[:100])
+    if cmd == "glance":
+        app, _, rest = arg.partition(" ")
+        if not app:
+            return help_
+        m = _TARGETS_RE.search(rest)
+        targets = m.group(1).split(",") if m else []
+        if m:
+            rest = rest[: m.start()]
+        lines = [part.strip() for part in rest.split("|")]
+        return "event", GlanceEvent(package=app.lower(), app=app[:100], lines=lines, targets=targets)
+    if cmd == "body":
+        doing, where, target = (arg.split() + [None, None, None])[:3]
+        if not doing:
+            return help_
+        return "event", BodyEvent(doing=doing, where=where, target=target)
+    if cmd == "moment":
+        kind, target, *_ = (arg.split() + [None, None])
+        if kind not in ("fell", "shooed"):
+            return help_
+        return "event", BodyMomentEvent(kind=kind, target=target)
     if cmd == "close":
         return "close", None
     if cmd in ("screen", "charge"):
@@ -159,6 +188,8 @@ def _render(action: Action) -> str | None:
         return f"[state mood={action.mood} tier={action.closeness_tier}]"
     if isinstance(action, Error):
         return f"[error {action.code}: {action.message}]"
+    if isinstance(action, Move):
+        return f"[move] {action.intent} {action.target}" if action.target else f"[move] {action.intent}"
     if isinstance(action, Typing) and action.on:
         return "(Maya is thinking…)"
     return None

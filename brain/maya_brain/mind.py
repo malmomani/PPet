@@ -19,7 +19,10 @@ from .protocol import (
     Animate,
     AppClosed,
     Audio,
+    BodyEvent,
+    BodyMomentEvent,
     Event,
+    GlanceEvent,
     Hello,
     NotificationEvent,
     OfflineSummary,
@@ -79,6 +82,22 @@ def _notification_line(event: NotificationEvent) -> str:
     return f"{event.sender} messaged on {event.app}"
 
 
+def _glance_headline(lines: list[str]) -> str:
+    """The first line with real words in it (a clock or a counter is not), else the first line."""
+    for line in lines:
+        if sum(c.isalpha() for c in line) >= 12:
+            return line[:120].rstrip()
+    return lines[0][:120].rstrip()
+
+
+def _moment_line(event: BodyMomentEvent) -> str:
+    if event.kind == "fell":
+        return "you fell when the screen moved under you"
+    if event.target:
+        return f"the user shooed you off the {event.target} button"
+    return "the user shooed you away"
+
+
 class Mind:
     def __init__(
         self,
@@ -102,6 +121,9 @@ class Mind:
         self._summarize_after: datetime | None = None
         self._connected = True  # the gateway reports the real state; tests and the simulator are always "connected"
         self._screen_on: bool | None = None  # None = unknown (treated as on)
+        self.glance: GlanceEvent | None = None  # the latest screen text (RAM only)
+        self.glance_at: datetime | None = None
+        self.body: BodyEvent | None = None  # where her body is now (RAM only)
         self.memory = Memory(db, llm, clock)
         self.persona = Persona(db, cfg.persona, clock)
         self.emotion = Emotion(db, clock)
@@ -167,6 +189,14 @@ class Mind:
                     self.memory.add_turn("event", f"User used {event.label} for {_fmt_use(event.duration_s)}")
             elif isinstance(event, NotificationEvent):
                 self.memory.add_turn("event", _notification_line(event))
+            elif isinstance(event, GlanceEvent):
+                self.glance, self.glance_at = event, self.clock.now()
+                if event.lines:
+                    self.memory.add_turn("event", f"on screen in {event.app}: {_glance_headline(event.lines)}")
+            elif isinstance(event, BodyEvent):
+                self.body = event
+            elif isinstance(event, BodyMomentEvent):
+                self.memory.add_turn("event", _moment_line(event))
             elif isinstance(event, OfflineSummary):
                 self._on_offline_summary(event)
             await self._maybe_initiate()
