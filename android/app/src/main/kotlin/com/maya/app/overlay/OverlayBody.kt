@@ -318,9 +318,10 @@ class OverlayBody(
             MotionEvent.ACTION_CANCEL -> {
                 main.removeCallbacks(holdRunnable)
                 if (holdFired) {
+                    // One UI may cancel the touch when the voice activity appears: keep listening.
+                    // The session then ends on ~2 s of silence or the 30 s cap.
                     endTouch()
                     holdFired = false
-                    if (listening) voice.stop() // keep what was heard so far
                     return true
                 }
                 val wasDragging = dragging

@@ -308,7 +308,7 @@ class SettingsActivity : Activity() {
         requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
     }
 
-    /** No on-device recognizer (API 33+ can tell): hold-to-talk would need the network or fail. */
+    /** No on-device recognizer (API 33+ can tell): hold-to-talk is unavailable until one is installed. */
     private fun offlineSpeechMissing(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         return try {

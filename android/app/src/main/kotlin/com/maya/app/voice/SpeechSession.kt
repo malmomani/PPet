@@ -13,7 +13,8 @@ import android.util.Log
 
 /**
  * One run of a [SpeechRecognizer] (created, listening, then destroyed). Used by [VoiceInput] from
- * the service and by [VoiceActivity] when the mic needs a foreground activity. Main thread only.
+ * the service and by [VoiceActivity] when the mic needs a foreground activity. With [onDevice] it
+ * uses the on-device recognizer (audio stays on the phone). Main thread only.
  * After [Callbacks.onResult] or [Callbacks.onError] nothing more is reported.
  */
 internal class SpeechSession(
@@ -96,7 +97,11 @@ internal class SpeechSession(
         }
     }
 
-    /** Marks the run done and frees the recognizer after the current callback returns. */
+    /**
+     * Marks the run done so nothing more is reported, and posts the release of the recognizer. The
+     * owner may free it sooner: [cancel]/[destroy] called from inside the final callback (as
+     * [VoiceActivity] does) release it right away, and the posted release is then a no-op.
+     */
     private fun finishSoon() {
         finished = true
         main.post { release() }
@@ -109,7 +114,7 @@ internal class SpeechSession(
         .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         .putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-        // Keep listening through pauses while the finger is down; releasing stops it.
+        // Listening ends on finger release (stop) or after ~2 s of silence, whichever comes first.
         .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
         .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
 
@@ -155,6 +160,6 @@ internal class SpeechSession(
     private companion object {
         const val TAG = "MayaSpeech"
         const val LANGUAGE = "en-US"
-        const val SILENCE_MS = 10_000L
+        const val SILENCE_MS = 2_000L
     }
 }

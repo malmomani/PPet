@@ -82,12 +82,12 @@ Samsung's One UI puts apps to sleep, which stops Maya. Menu names vary a little 
 You can talk to Maya instead of typing, and she can answer out loud.
 
 1. Grant **Microphone** in the app's permission list (section 5).
-2. Press and hold Maya for about half a second, without moving your finger. The phone gives a small buzz and her bubble shows 🎤. Keep holding and speak; the bubble shows what she hears as you go.
-3. Let go when you're done. She gets what you said and answers. (A quick tap still opens the chat box, and dragging or throwing her works as before.)
+2. Hold her and talk: press and hold Maya for about half a second, without moving your finger. The phone gives a small buzz and her bubble shows 🎤. Speak; the bubble shows what she hears as you go.
+3. Let go, or just pause for about 2 seconds, to send. She gets what you said and answers. (A quick tap still opens the chat box, and dragging or throwing her works as before.)
 
 If she says "…didn't catch that 🤔", hold her again and speak a little louder or closer. Listening stops by itself after 30 seconds.
 
-Your voice never leaves the phone: the phone turns speech into text and only the text goes to your PC.
+The phone turns your speech into text and only the text goes to your PC. On Android 13 and newer, speech stays on the phone: Maya only uses the phone's offline speech recognition (see **Offline English speech** below). On older Android, your phone's speech service may use the internet if the offline model isn't installed.
 
 **Maya's voice.** In the app, under **Maya's voice**, choose when she speaks her replies:
 
@@ -97,7 +97,7 @@ Your voice never leaves the phone: the phone turns speech into text and only the
 
 She stays quiet when the phone is on silent or vibrate, when you tap **Shh** or **Hide**, and the moment you start talking to her. Changing this setting restarts Maya for a second.
 
-**Offline English speech.** Speech recognition works best with the offline English model installed. If the app shows **Offline English speech: not installed**, tap **Set up** next to it. On Samsung the place is usually **Settings** → **General management** → **Keyboard list and default** (or **Voice input**) → pick **Speech Services by Google** (or Samsung's voice input) → **Offline speech recognition** → download **English (US)**. The wording varies between One UI versions; searching Settings for "offline speech" also finds it.
+**Offline English speech.** On Android 13 and newer, talking to Maya needs the offline English model. If the app shows **Offline English speech: not installed**, tap **Set up** next to it. On Samsung the place is usually **Settings** → **General management** → **Keyboard list and default** (or **Voice input**) → pick **Speech Services by Google** (or Samsung's voice input) → **Offline speech recognition** → download **English (US)**. The wording varies between One UI versions; searching Settings for "offline speech" also finds it.
 
 **Her voice comes from your PC.** The PC brain makes the speech audio. Set it up once on the PC as described in the brain guide's [Voice](../brain/README.md#voice) section; without it she answers in text only.
 

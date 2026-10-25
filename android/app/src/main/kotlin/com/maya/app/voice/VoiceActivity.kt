@@ -3,6 +3,7 @@ package com.maya.app.voice
 import android.app.Activity
 import android.os.Bundle
 import android.speech.SpeechRecognizer
+import android.view.WindowManager
 
 /**
  * Process-local hand-off between [VoiceInput] (in the service) and [VoiceActivity]. VoiceInput
@@ -24,7 +25,9 @@ internal object VoiceBridge {
 /**
  * A translucent, layout-less activity that exists only while Maya listens. A foreground activity
  * always has mic rights, which the overlay service may lack (background while-in-use limits), so
- * when the service's own recognizer is refused [VoiceInput] runs it from here instead.
+ * [VoiceInput] runs the recognizer from here: always on Android 14+, and below that once the
+ * service's own recognizer was refused. Its window is fully transparent, not touchable and not
+ * focusable, so the app underneath keeps its touches and keyboard.
  */
 class VoiceActivity : Activity() {
     private var request: VoiceBridge.Request? = null
@@ -33,6 +36,11 @@ class VoiceActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Invisible and inert: touches pass through to the app below and its keyboard keeps focus.
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        val attrs = window.attributes
+        attrs.alpha = 0f
+        window.attributes = attrs
         val req = VoiceBridge.current
         if (savedInstanceState != null || req == null || req.cancelled || req.activity != null) {
             close()

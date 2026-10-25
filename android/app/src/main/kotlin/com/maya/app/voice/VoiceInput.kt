@@ -15,12 +15,17 @@ import android.util.Log
  * Hold-to-talk speech input. [start] begins a session, [stop] ends capture and delivers the result,
  * [cancel] drops it. Every started session ends with exactly one of [Listener.onFinal],
  * [Listener.onNoMatch] or [Listener.onUnavailable] with [Reason.NO_RECOGNIZER]/[Reason.PERMISSION]
- * (unless cancelled). Callbacks may arrive synchronously from [start]. Main thread only.
+ * (unless cancelled). The recognizer also ends a session by itself after ~2 s of silence.
+ * Callbacks may arrive synchronously from [start]. Main thread only. Transcripts are never logged.
  *
- * The recognizer first runs from the service. If Android refuses it the mic there (error, never
- * ready, or a silenced mic that never hears speech), the rest of the service run uses
- * [VoiceActivity] instead, a translucent foreground activity that always may record.
- * Transcripts are never logged.
+ * Privacy: on Android 13+ only the on-device recognizer is used, so audio never leaves the phone;
+ * without it (or without its English model) input is unavailable. Older Android uses the default
+ * recognizer with EXTRA_PREFER_OFFLINE.
+ *
+ * Mic rights: on Android 14+ a background service may not record, so every session runs inside
+ * [VoiceActivity], a translucent foreground activity. Below 14 the recognizer first runs from the
+ * service; if Android refuses it the mic (error, never ready, or a silenced mic that never hears
+ * speech) the rest of the service run uses the activity.
  */
 class VoiceInput(context: Context, private val listener: Listener) {
     interface Listener {
@@ -30,8 +35,8 @@ class VoiceInput(context: Context, private val listener: Listener) {
 
         /**
          * [Reason.NO_RECOGNIZER] and [Reason.PERMISSION] end the session. [Reason.BACKGROUND_DENIED]
-         * is only a notice (sent once): the session carries on through [VoiceActivity] if the finger
-         * is still down, and later sessions use it from the start.
+         * is only a notice (sent once, below Android 14): the session carries on through
+         * [VoiceActivity] if the finger is still down, and later sessions use it from the start.
          */
         fun onUnavailable(reason: Reason)
     }
@@ -40,12 +45,13 @@ class VoiceInput(context: Context, private val listener: Listener) {
 
     private val ctx: Context = context
     private val main = Handler(Looper.getMainLooper())
+    private val onDeviceOnly = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
     private val readyTimeout = Runnable { onReadyTimeout() }
     private val finishTimeout = Runnable { if (active) deliverHeard() }
+    private val busyRetry = Runnable { if (active) launch() }
 
     // Remembered for the life of this object (one service run).
-    private var activityMode = false
-    private var onDeviceOk = true
+    private var activityMode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
     private var reportedBackground = false
 
     // The current session.
@@ -54,14 +60,14 @@ class VoiceInput(context: Context, private val listener: Listener) {
     private var stopRequested = false
     private var ready = false
     private var heardSpeech = false
+    private var busyRetried = false
     private var readyAtMs = 0L
     private var stopAtMs = 0L
     private var lastPartial = ""
-    private var usedOnDevice = false
     private var direct: SpeechSession? = null
     private var request: VoiceBridge.Request? = null
 
-    /** True once the service's own recognizer was refused the mic and [VoiceActivity] is used. */
+    /** True when sessions run in [VoiceActivity] (always on Android 14+). */
     val usesActivity: Boolean get() = activityMode
 
     fun start() {
@@ -76,6 +82,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
         }
         active = true
         stopRequested = false
+        busyRetried = false
         stopAtMs = 0L
         lastPartial = ""
         launch()
@@ -86,17 +93,13 @@ class VoiceInput(context: Context, private val listener: Listener) {
         if (!active || stopRequested) return
         stopRequested = true
         stopAtMs = SystemClock.uptimeMillis()
-        if (activityMode) {
-            val activity = request?.activity
-            if (activity == null) {
-                // The activity never came up, so nothing was recorded.
-                deliverHeard()
-                return
-            }
-            activity.stopListening()
-        } else {
-            direct?.stop()
+        if (direct == null && request?.activity == null) {
+            // Nothing is recording yet (activity not up, or waiting to retry): nothing was heard.
+            deliverHeard()
+            return
         }
+        direct?.stop()
+        request?.activity?.stopListening()
         main.removeCallbacks(finishTimeout)
         main.postDelayed(finishTimeout, FINISH_TIMEOUT_MS)
     }
@@ -116,11 +119,10 @@ class VoiceInput(context: Context, private val listener: Listener) {
         val gen = ++generation
         ready = false
         heardSpeech = false
-        usedOnDevice = onDeviceOk && onDeviceAvailable()
         main.removeCallbacks(readyTimeout)
         val relay = Relay(gen)
         if (activityMode) {
-            val req = VoiceBridge.Request(usedOnDevice, relay)
+            val req = VoiceBridge.Request(onDeviceOnly, relay)
             request = req
             VoiceBridge.current = req
             val intent = Intent(ctx, VoiceActivity::class.java)
@@ -134,7 +136,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
             }
             main.postDelayed(readyTimeout, ACTIVITY_READY_TIMEOUT_MS)
         } else {
-            val s = SpeechSession(ctx, usedOnDevice, relay)
+            val s = SpeechSession(ctx, onDeviceOnly, relay)
             if (!s.start()) {
                 fallbackToActivity()
                 return
@@ -165,14 +167,18 @@ class VoiceInput(context: Context, private val listener: Listener) {
             SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS, SpeechRecognizer.ERROR_AUDIO -> {
                 if (activityMode) fail(Reason.PERMISSION) else fallbackToActivity()
             }
-            SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> {
-                // The on-device recognizer lacks English: use the regular one from now on.
-                val retry = usedOnDevice
-                onDeviceOk = false
-                when {
-                    !retry || !recognizerAvailable() -> fail(Reason.NO_RECOGNIZER)
-                    stopRequested -> deliverHeard()
-                    else -> relaunch()
+            // No English model for the recognizer. Never fall back to a recognizer that might send
+            // audio off the phone: the user installs offline English speech instead.
+            SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
+                fail(Reason.NO_RECOGNIZER)
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
+                if (busyRetried || stopRequested) {
+                    deliverHeard()
+                } else {
+                    busyRetried = true
+                    tearDown()
+                    main.removeCallbacks(readyTimeout)
+                    main.postDelayed(busyRetry, BUSY_RETRY_MS)
                 }
             }
             else -> {
@@ -185,13 +191,17 @@ class VoiceInput(context: Context, private val listener: Listener) {
 
     private fun onReadyTimeout() {
         if (!active || ready) return
-        if (activityMode) fail(Reason.PERMISSION) else fallbackToActivity()
+        when {
+            stopRequested -> deliverHeard() // a quick release, not a refused mic: keep the mode
+            activityMode -> fail(Reason.PERMISSION)
+            else -> fallbackToActivity()
+        }
     }
 
     /**
-     * From the service, Android may hand the recognizer a silenced mic instead of an error. If it was
-     * ready, the finger stayed down a while and not a single word was heard, assume that happened
-     * and use the activity from the next hold on.
+     * Below Android 14, the service's recognizer may get a silenced mic instead of an error. If it
+     * was ready, the finger stayed down a while and not a single word was heard, assume that
+     * happened and use the activity from the next hold on.
      */
     private fun noteSilence() {
         if (activityMode || !ready || heardSpeech || lastPartial.isNotBlank()) return
@@ -213,11 +223,6 @@ class VoiceInput(context: Context, private val listener: Listener) {
         if (stopRequested) deliverHeard() else launch()
     }
 
-    private fun relaunch() {
-        tearDown()
-        launch()
-    }
-
     private fun deliverHeard() {
         val text = lastPartial.trim()
         finishSession()
@@ -234,6 +239,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
         generation++
         main.removeCallbacks(readyTimeout)
         main.removeCallbacks(finishTimeout)
+        main.removeCallbacks(busyRetry)
         tearDown()
     }
 
@@ -250,14 +256,13 @@ class VoiceInput(context: Context, private val listener: Listener) {
 
     // ---- availability ----
 
-    private fun onDeviceAvailable(): Boolean = try {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)
-    } catch (e: RuntimeException) {
-        false
-    }
-
+    /** Android 13+: the on-device recognizer only. Older: any recognizer service. */
     private fun recognizerAvailable(): Boolean = try {
-        (onDeviceOk && onDeviceAvailable()) || SpeechRecognizer.isRecognitionAvailable(ctx)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)
+        } else {
+            SpeechRecognizer.isRecognitionAvailable(ctx)
+        }
     } catch (e: RuntimeException) {
         false
     }
@@ -296,5 +301,6 @@ class VoiceInput(context: Context, private val listener: Listener) {
         const val ACTIVITY_READY_TIMEOUT_MS = 4000L
         const val FINISH_TIMEOUT_MS = 5000L
         const val SILENT_HOLD_MS = 1500L
+        const val BUSY_RETRY_MS = 300L
     }
 }

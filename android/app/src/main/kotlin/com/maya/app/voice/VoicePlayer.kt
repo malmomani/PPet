@@ -5,15 +5,18 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import java.io.File
 
 /**
  * Plays Maya's spoken replies (`audio` actions: base64 WAV). Only the audio for the latest `say`
- * ([onSay]) is played, so audio that arrives late (after a newer line or a reconnect) is dropped.
- * Silent/vibrate ringer modes skip playback. [onStarted] runs when a clip starts. Errors are
- * swallowed: the bubble already shows the text. Main thread only.
+ * ([onSay]) is played, so audio that arrives late (after a newer line or a reconnect) is dropped,
+ * and a new line stops the old clip. Playback is skipped in silent/vibrate ringer modes, during
+ * calls, and when audio focus is refused; losing focus stops it. [onStarted] runs when a clip
+ * starts. Errors are swallowed: the bubble already shows the text. Main thread only.
  */
 class VoicePlayer(context: Context, private val onStarted: () -> Unit = {}) {
     private val ctx: Context = context.applicationContext
@@ -23,17 +26,23 @@ class VoicePlayer(context: Context, private val onStarted: () -> Unit = {}) {
         .setUsage(AudioAttributes.USAGE_ASSISTANT)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
         .build()
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        // Another app took the audio (call, navigation, music...): stop. Ducking requests are fine.
+        if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) stop()
+    }
     private val focusRequest: AudioFocusRequest =
         AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(attributes)
+            .setOnAudioFocusChangeListener(focusListener, Handler(Looper.getMainLooper()))
             .build()
 
     private var latestSayId = ""
     private var player: MediaPlayer? = null
     private var released = false
 
-    /** A `say` arrived: from now on only its audio may play. */
+    /** A `say` arrived: from now on only its audio may play (an older clip stops). */
     fun onSay(id: String) {
+        if (id != latestSayId) stop()
         latestSayId = id
     }
 
@@ -41,6 +50,8 @@ class VoicePlayer(context: Context, private val onStarted: () -> Unit = {}) {
         if (released || refId.isEmpty() || refId != latestSayId) return
         val ringer = audio?.ringerMode ?: AudioManager.RINGER_MODE_NORMAL
         if (ringer != AudioManager.RINGER_MODE_NORMAL) return
+        val mode = audio?.mode ?: AudioManager.MODE_NORMAL
+        if (mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION) return
         stop() // a newer clip replaces the current one
         var mp: MediaPlayer? = null
         try {
@@ -58,7 +69,13 @@ class VoicePlayer(context: Context, private val onStarted: () -> Unit = {}) {
                 true
             }
             p.prepare()
-            audio?.requestAudioFocus(focusRequest)
+            val focus = audio?.requestAudioFocus(focusRequest) ?: AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            if (focus != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                p.release()
+                mp = null
+                abandonFocus() // a delayed request must not grant focus later
+                return
+            }
             p.start()
             player = p
             mp = null
