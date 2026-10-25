@@ -3,6 +3,7 @@
 import asyncio
 import io
 import re
+import threading
 import unicodedata
 import wave
 from collections.abc import Sequence
@@ -53,6 +54,7 @@ class KokoroTTS:
         self.cfg = cfg
         self.base_dir = Path(base_dir)
         self._kokoro = None
+        self._load_lock = threading.Lock()
 
     @property
     def model_file(self) -> Path:
@@ -65,16 +67,17 @@ class KokoroTTS:
     def available(self) -> bool:
         try:
             import kokoro_onnx  # noqa: F401
-        except ImportError:
+        except Exception:  # a broken onnxruntime/numpy install must not crash startup
             return False
         return self.model_file.is_file() and self.voices_file.is_file()
 
     def _load(self):
-        if self._kokoro is None:
-            from kokoro_onnx import Kokoro
+        with self._load_lock:
+            if self._kokoro is None:
+                from kokoro_onnx import Kokoro
 
-            self._kokoro = Kokoro(str(self.model_file), str(self.voices_file))
-        return self._kokoro
+                self._kokoro = Kokoro(str(self.model_file), str(self.voices_file))
+            return self._kokoro
 
     def _synth_blocking(self, text: str) -> bytes:
         samples, rate = self._load().create(text, voice=self.cfg.voice, speed=self.cfg.speed, lang="en-us")

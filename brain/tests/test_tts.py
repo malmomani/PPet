@@ -1,3 +1,5 @@
+import asyncio
+import builtins
 import io
 import sys
 import types
@@ -121,3 +123,28 @@ def test_fetch_voice_missing_files(tmp_path):
     assert all(url == BASE_URL + name for name, url in todo)
     (tmp_path / FILES[0]).write_bytes(b"x")
     assert [name for name, _ in missing_files(tmp_path)] == [FILES[1]]
+
+
+def test_kokoro_unavailable_when_import_is_broken(monkeypatch, tmp_path):
+    cfg = VoiceConfig()
+    _touch_models(tmp_path, cfg)
+    monkeypatch.delitem(sys.modules, "kokoro_onnx", raising=False)
+    real_import = builtins.__import__
+
+    def broken(name, *a, **kw):
+        if name == "kokoro_onnx":
+            raise RuntimeError("onnxruntime is broken")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", broken)
+    assert KokoroTTS(cfg, tmp_path).available() is False
+
+
+async def test_kokoro_concurrent_first_synth_loads_once(monkeypatch, tmp_path):
+    created = []
+    _install_stub(monkeypatch, created)
+    cfg = VoiceConfig()
+    _touch_models(tmp_path, cfg)
+    tts = KokoroTTS(cfg, tmp_path)
+    await asyncio.gather(*(tts.synth(f"hi {i}") for i in range(5)))
+    assert [c[0] for c in created].count("init") == 1
