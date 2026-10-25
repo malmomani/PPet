@@ -28,6 +28,10 @@ import com.maya.core.Action
 import com.maya.core.Animate
 import com.maya.core.Audio
 import com.maya.core.Behavior
+import com.maya.core.Body
+import com.maya.core.BodyMoment
+import com.maya.core.BodyReporter
+import com.maya.core.BodySnapshot
 import com.maya.core.ErrorMsg
 import com.maya.core.Event
 import com.maya.core.Gesture
@@ -49,8 +53,11 @@ import kotlin.random.Random
 private const val TAG = "MayaOverlay"
 
 /**
- * Maya's floating body: a sprite-sized overlay window near the bottom of the screen, moved by a
+ * Maya's floating body: a sprite-sized overlay window that roams the whole screen (the floor near
+ * the bottom, or the keyboard's top, plus the platforms of the current app's [Layout]), moved by a
  * ~30 fps Choreographer loop that drives [Behavior], plus her speech bubble and the chat window.
+ * The brain steers her with [Move] and sets how playful she is with [State]; every frame she
+ * reports her body ([Body], throttled by [BodyReporter]) and what happened to it ([BodyMoment]).
  * The loop only runs while she is visible and the screen is on and unlocked ([setScreenOn]).
  * Holding her still for [HOLD_TO_TALK_MS] starts listening ([VoiceInput]); [onListening] reports
  * when listening starts and ends. Lines (and typing dots) that arrive while she listens, or while
@@ -66,10 +73,14 @@ class OverlayBody(
     private val wm: WindowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val density = ctx.resources.displayMetrics.density
     private val sheet = SpriteSheet(ctx.assets)
-    // Integer nearest-neighbour scale so a frame is about SPRITE_DP tall (64 px art -> x3 at density 3).
-    private val scale = (SPRITE_DP * density / sheet.frameH).roundToInt().coerceAtLeast(1)
-    private val spriteSize = sheet.frameW * scale
-    private val spriteH = sheet.frameH * scale
+    // Integer nearest-neighbour scale so a frame is about 64 dp tall (64 px art -> x3 at density 3);
+    // the same rule the screen sense uses to decide which edges she fits on.
+    private val metrics = SpriteMetrics.forContext(ctx)
+    private val scale = metrics.scale
+    private val spriteSize = metrics.width
+    private val spriteH = metrics.height
+    /** Her feet within the window: the sheet's anchor row (60 of 64), scaled. */
+    private val footY = (sheet.anchorY ?: (sheet.frameH - DEFAULT_FOOT_INSET)) * scale
     private val touchSlop = ViewConfiguration.get(ctx).scaledTouchSlop
     private val choreographer = Choreographer.getInstance()
     private val main = Handler(Looper.getMainLooper())
@@ -78,6 +89,14 @@ class OverlayBody(
     private var screenH = 0
     private var behavior: Behavior
     private var connected = false
+    private val reporter = BodyReporter(BODY_THROTTLE_MS)
+
+    // What the body was told, kept so a new Behavior (rotation) starts from the same place.
+    private var layout: Layout = Layout.EMPTY
+    private var keyboardTop: Int? = null
+    private var restricted = false
+    private var mood: String? = null
+    private var tier: String? = null
 
     private val spriteView = SpriteView(ctx, sheet)
     private val params = overlayParams(
@@ -145,10 +164,9 @@ class OverlayBody(
         val (w, h) = screenSize()
         screenW = w
         screenH = h
-        behavior = newBehavior()
-        behavior.setConnected(false) // napping until the connection says otherwise
-        params.x = behavior.x.roundToInt()
-        params.y = restingY()
+        behavior = newBehavior() // napping on the floor until the connection says otherwise
+        params.x = windowX()
+        params.y = windowY()
         spriteView.setOnTouchListener { _, event -> onTouch(event) }
     }
 
@@ -173,10 +191,16 @@ class OverlayBody(
                 updatePose()
                 if (bubbleHeld()) deferredTyping = a.on else if (visible) bubble.typing(a.on)
             }
-            is State -> Unit // nothing visible in v1
+            // Mood and closeness set how often she jumps around.
+            is State -> {
+                mood = a.mood
+                tier = a.closenessTier
+                behavior.setTemper(a.mood, a.closenessTier)
+            }
             is Audio -> Unit // played by the service's VoicePlayer
             is ErrorMsg -> Unit // the service handles auth errors
-            is Move -> Unit // acted on once the body is 2-D
+            // Ignored by Behavior while she is held, thrown or disconnected.
+            is Move -> behavior.command(a.intent, a.target)
         }
     }
 
@@ -191,8 +215,19 @@ class OverlayBody(
         updatePose()
     }
 
-    /** The current app's platforms and targets; used once the body is 2-D (Task 8). */
-    override fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean) {}
+    /**
+     * The current app's platforms and tease targets; an open keyboard is her floor. Restriction
+     * goes first, so platforms that vanish because she may not use them now (a call, a
+     * do-not-watch app) never count as her falling off.
+     */
+    override fun setScreenLayout(layout: Layout, keyboardTop: Int?, restricted: Boolean) {
+        this.layout = layout
+        this.keyboardTop = keyboardTop
+        this.restricted = restricted
+        behavior.setFloor(floorY())
+        behavior.setRestricted(restricted)
+        behavior.setLayout(layout)
+    }
 
     /** Sustained pose from what's going on: listening beats talking beats thinking. */
     private fun updatePose() {
@@ -209,6 +244,7 @@ class OverlayBody(
     override fun setConnected(on: Boolean) {
         connected = on
         behavior.setConnected(on)
+        if (on) reporter.reset() // the brain hears where she is right away
         if (!on) {
             thinking = false
             updatePose()
@@ -243,7 +279,7 @@ class OverlayBody(
     fun hide() {
         stopLoop()
         cancelThrow()
-        if (dragging) behavior.dragEnd(params.x.toFloat())
+        if (dragging) releaseAtWindow()
         endTouch()
         main.removeCallbacks(holdRunnable)
         holdFired = false
@@ -289,12 +325,34 @@ class OverlayBody(
         spriteView.setAnimation(behavior.animation)
         spriteView.facingLeft = behavior.facingLeft
         spriteView.advance(dtMs)
-        if (!dragging && throwAnim == null) {
-            val x = behavior.x.roundToInt()
-            if (x != params.x) moveWindow(x, params.y)
-        }
+        if (!held()) moveWindow(windowX(), windowY())
         bubble.follow(params.x, params.y, spriteSize, screenW)
+        report()
     }
+
+    /** True while the finger or a throw places the window (Behavior is in its dragged state). */
+    private fun held(): Boolean = dragging || throwAnim != null
+
+    /**
+     * Tells the brain what happened to her ([BodyMoment]) and, throttled, what she is doing and
+     * where ([Body]: her feet as fractions of the screen). Nothing is reported while disconnected
+     * (moments from then are dropped); [setConnected] makes the next report go out at once.
+     */
+    private fun report() {
+        val moments = behavior.drainMoments()
+        if (!connected) return
+        for (m in moments) emit(BodyMoment(m.kind, m.target))
+        val s = behavior.state
+        // While held, Behavior's feet stay where she was picked up: report the window's instead.
+        val feetX = if (held()) params.x + spriteSize / 2f else s.feetX
+        val feetY = if (held()) (params.y + footY).toFloat() else s.feetY
+        val snap = BodySnapshot(s.doing, s.where, s.target, fraction(feetX, screenW), fraction(feetY, screenH))
+        val now = SystemClock.elapsedRealtime()
+        val out = reporter.update(snap, now) ?: reporter.poll(now) ?: return
+        emit(Body(out.doing, out.where, out.target, out.x, out.y))
+    }
+
+    private fun fraction(v: Float, of: Int): Double = if (of > 0) (v.toDouble() / of).coerceIn(0.0, 1.0) else 0.0
 
     // ---- touch ----
 
@@ -365,7 +423,7 @@ class OverlayBody(
                     when (gesture) {
                         Gesture.TAP -> onTap(true)
                         Gesture.DRAG -> {
-                            behavior.dragEnd(params.x.toFloat())
+                            releaseAtWindow()
                             emit(UserDrag(false))
                         }
                         Gesture.FLING -> throwBody(vx, vy)
@@ -383,7 +441,7 @@ class OverlayBody(
                 }
                 val wasDragging = dragging
                 endTouch()
-                if (wasDragging) behavior.dragEnd(params.x.toFloat())
+                if (wasDragging) releaseAtWindow()
             }
         }
         return true
@@ -407,8 +465,12 @@ class OverlayBody(
 
     private fun onTap(wasDragging: Boolean) {
         // A tap that ended a drag-start (finger wandered and came back) still has to release her.
-        if (wasDragging) behavior.dragEnd(params.x.toFloat())
+        if (wasDragging) releaseAtWindow()
+        // A tap while she teases a button shoos her off it: the brain still hears the tap, but
+        // no chat window opens.
+        val shooed = behavior.tapped()
         emit(UserTap())
+        if (shooed) return
         if (!connected) {
             bubble.say(ctx.getString(R.string.bubble_unreachable), UNREACHABLE_BUBBLE_MS)
             return
@@ -565,7 +627,7 @@ class OverlayBody(
                 if (throwAnim === animation) throwAnim = null
                 if (canceled) return
                 moveWindow(endX, endY)
-                behavior.dragEnd(params.x.toFloat())
+                releaseAtWindow()
                 emit(UserDrag(true))
             }
         })
@@ -578,7 +640,7 @@ class OverlayBody(
         val anim = throwAnim ?: return
         throwAnim = null
         anim.cancel()
-        behavior.dragEnd(params.x.toFloat())
+        releaseAtWindow()
     }
 
     // ---- geometry ----
@@ -594,25 +656,71 @@ class OverlayBody(
 
     private fun maxY(): Int = (screenH - spriteH).coerceAtLeast(0)
 
-    private fun restingY(): Int = (screenH - spriteH - (BOTTOM_MARGIN_DP * density).roundToInt()).coerceIn(0, maxY())
+    /** Her window follows [behavior] (the sprite box), kept on screen. */
+    private fun windowX(): Int = behavior.x.roundToInt().coerceIn(0, maxX())
 
-    private fun newBehavior(): Behavior = Behavior(screenW, spriteSize, Random.Default, SPEED_DP_PER_S * density)
+    private fun windowY(): Int = behavior.y.roundToInt().coerceIn(0, maxY())
 
-    /** Rotation / resolution change: rebuild the behaviour for the new width and keep her on screen. */
+    /** Lets go of her where her window is now; she falls (or lands at once) from there. */
+    private fun releaseAtWindow() = behavior.dragEnd(params.x.toFloat(), params.y.toFloat())
+
+    /**
+     * Where her feet rest with no keyboard: the line they always rested on, [BOTTOM_MARGIN_DP]
+     * above the screen bottom (the window's bottom edge) less the gap under her feet.
+     */
+    private fun defaultFloorY(): Int {
+        val restingTop = (screenH - spriteH - (BOTTOM_MARGIN_DP * density).roundToInt()).coerceIn(0, maxY())
+        return restingTop + footY
+    }
+
+    /** The open keyboard's top is her floor; never below the usual floor (a stale or odd value). */
+    private fun floorY(): Int {
+        val default = defaultFloorY()
+        return keyboardTop?.let { minOf(it, default) } ?: default
+    }
+
+    /** A body for the current screen size that knows everything the old one was told. */
+    private fun newBehavior(): Behavior {
+        val b = Behavior(
+            screenW,
+            screenH,
+            spriteSize,
+            spriteH,
+            footY,
+            Random.Default,
+            SPEED_DP_PER_S * density,
+            GRAVITY_DP_PER_S2 * density,
+        )
+        b.setFloor(floorY()) // a floor above the start carries her up onto it
+        b.setRestricted(restricted)
+        b.setLayout(layout)
+        val m = mood
+        val t = tier
+        if (m != null && t != null) b.setTemper(m, t)
+        b.setConnected(connected)
+        return b
+    }
+
+    /**
+     * Rotation / resolution change: rebuild the behaviour for the new size and drop her in from
+     * where she was (clamped to the new screen), so she lands on whatever is below.
+     */
     private fun refreshScreenSize() {
         val (w, h) = screenSize()
         if (w == screenW && h == screenH) return
         val oldX = params.x
-        val wasAtRest = params.y == restingY()
+        val oldY = params.y
         screenW = w
         screenH = h
         behavior = newBehavior()
-        behavior.setConnected(connected)
-        behavior.dragEnd(oldX.coerceIn(0, maxX()).toFloat())
-        if (dragging) behavior.dragStart()
+        behavior.dragEnd(oldX.coerceIn(0, maxX()).toFloat(), oldY.coerceIn(0, maxY()).toFloat())
+        if (held()) behavior.dragStart()
         updatePose() // the new body starts without the old one's pose
-        val y = if (wasAtRest) restingY() else params.y.coerceIn(0, maxY())
-        moveWindow(behavior.x.roundToInt(), y)
+        if (held()) {
+            moveWindow(params.x.coerceIn(0, maxX()), params.y.coerceIn(0, maxY()))
+        } else {
+            moveWindow(windowX(), windowY())
+        }
     }
 
     private fun screenSize(): Pair<Int, Int> {
@@ -629,7 +737,9 @@ class OverlayBody(
         const val MAX_DT_MS = 250L
         const val SIZE_CHECK_MS = 1000L
         const val SPEED_DP_PER_S = 40f
-        const val SPRITE_DP = 64f
+        const val GRAVITY_DP_PER_S2 = 3000f
+        const val DEFAULT_FOOT_INSET = 4 // feet this many art px above the frame bottom (no anchor)
+        const val BODY_THROTTLE_MS = 5000L
         const val BOTTOM_MARGIN_DP = 48f
         const val THROW_MS = 350L
         const val THROW_SECONDS = 0.25f
