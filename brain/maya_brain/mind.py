@@ -1,6 +1,7 @@
 """Mind: composes every module and turns phone events into phone actions."""
 
 import asyncio
+import base64
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
@@ -17,6 +18,7 @@ from .protocol import (
     Action,
     Animate,
     AppClosed,
+    Audio,
     Event,
     Hello,
     OfflineSummary,
@@ -33,6 +35,7 @@ from .protocol import (
 )
 from .reflection import Reflection
 from .thinker import Context, Thinker, Thought
+from .tts import TTS, TTSError, speakable
 
 log = logging.getLogger(__name__)
 
@@ -67,9 +70,19 @@ def _fmt_away(seconds: int) -> str:
 
 class Mind:
     def __init__(
-        self, cfg: Config, llm: LLM, db: sqlite3.Connection, clock: Clock, sink: ActionSink | None = None
+        self,
+        cfg: Config,
+        llm: LLM,
+        db: sqlite3.Connection,
+        clock: Clock,
+        sink: ActionSink | None = None,
+        tts: TTS | None = None,
     ) -> None:
         self.cfg = cfg
+        self.tts = tts
+        self.voice_mode = "off"  # from the latest Hello: off | replies | always
+        self._voice_reply = False  # True while handling a UserMessage that was spoken
+        self._voice_task: asyncio.Task | None = None
         self.clock = clock
         self._sink = sink
         self._lock = asyncio.Lock()
@@ -128,6 +141,7 @@ class Mind:
                 return
             if isinstance(event, Hello):
                 self._screen_on = None
+                self.voice_mode = event.voice_mode
                 await self._emit_state()
             elif isinstance(event, Screen):
                 self._screen_on = event.on
@@ -147,7 +161,11 @@ class Mind:
     async def _on_message(self, event: UserMessage) -> None:
         self.memory.add_turn("user", event.text)
         self.emotion.note_interaction()
-        await self._respond(Context("user_message", f'User says: "{event.text}"'))
+        self._voice_reply = event.voice
+        try:
+            await self._respond(Context("user_message", f'User says: "{event.text}"'))
+        finally:
+            self._voice_reply = False
 
     async def _on_tap(self) -> None:
         self.emotion.note_interaction()
@@ -195,7 +213,7 @@ class Mind:
         try:
             thought = await self._think(ctx)
             if thought is None:
-                await self._emit(Say(text=CANNED_FOGGY, bubble_ms=bubble_ms(CANNED_FOGGY)))
+                await self._say(CANNED_FOGGY)
         finally:
             await self._emit(Typing(on=False))
         self.initiative.engaged()
@@ -218,10 +236,52 @@ class Mind:
         spoke = bool(thought.speak and thought.say)
         if spoke:
             self.memory.add_turn("maya", thought.say)
-            await self._emit(Say(text=thought.say, bubble_ms=bubble_ms(thought.say)))
+            await self._say(thought.say)
         if (self.emotion.mood()[0], self.emotion.tier()) != before:
             await self._emit_state()
         return spoke
+
+    async def _say(self, text: str) -> None:
+        say = Say(text=text, bubble_ms=bubble_ms(text))
+        await self._emit(say)
+        self._maybe_voice(say)
+
+    # ---- voice ----
+
+    def _should_voice(self) -> bool:
+        if self.tts is None or not self.cfg.voice.enabled:
+            return False
+        if self.voice_mode == "always":
+            return True
+        return self.voice_mode == "replies" and self._voice_reply
+
+    def _maybe_voice(self, say: Say) -> None:
+        """Start synthesis in the background (the caller holds the lock; TTS must not)."""
+        if not self._should_voice():
+            return
+        text = speakable(say.text)
+        if not text:
+            return
+        if self._voice_task is not None:
+            self._voice_task.cancel()  # a newer say supersedes a pending older one
+        self._voice_task = asyncio.create_task(self._voice(say.id, text))
+
+    async def _voice(self, say_id: str, text: str) -> None:
+        assert self.tts is not None
+        try:
+            wav = await self.tts.synth(text)
+        except TTSError as e:
+            log.warning("voice synthesis failed: %s", e)
+            return
+        try:
+            await self._emit(Audio(ref_id=say_id, data_b64=base64.b64encode(wav).decode("ascii")))
+        except Exception as e:  # e.g. the phone went away mid-send
+            log.warning("sending voice audio failed: %s", e)
+
+    async def wait_voice(self) -> None:
+        """Wait for the in-flight TTS task (if any); for tests and the simulator."""
+        while self._voice_task is not None and not self._voice_task.done():
+            await asyncio.wait([self._voice_task])  # cancelled tasks end quietly; our own cancellation still raises
 
     async def _emit_state(self) -> None:
         await self._emit(State(mood=self.emotion.mood()[0], closeness_tier=self.emotion.tier()))
