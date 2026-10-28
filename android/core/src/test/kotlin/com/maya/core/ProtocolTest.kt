@@ -209,6 +209,32 @@ class ProtocolTest {
         assertNull(Protocol.decodeAction("""{"type":"move","intent":"poke","target":5}"""))
     }
 
+    @Test fun encode_sight_and_failed() {
+        val ts = Instant.parse("2026-10-28T09:00:00Z")
+        val s = Json.parseToJsonElement(
+            Protocol.encode(Sight("com.pics", "Pics", "auto", "QUJD", id = "s1", ts = ts)),
+        ).jsonObject
+        assertEquals(setOf("type", "id", "ts", "package", "app", "reason", "image_b64"), s.keys)
+        assertEquals("sight", s["type"]!!.jsonPrimitive.content)
+        assertEquals("s1", s["id"]!!.jsonPrimitive.content)
+        assertEquals("2026-10-28T09:00:00Z", s["ts"]!!.jsonPrimitive.content)
+        assertEquals("com.pics", s["package"]!!.jsonPrimitive.content)
+        assertEquals("Pics", s["app"]!!.jsonPrimitive.content)
+        assertEquals("auto", s["reason"]!!.jsonPrimitive.content)
+        assertEquals("QUJD", s["image_b64"]!!.jsonPrimitive.content)
+
+        val f = Json.parseToJsonElement(Protocol.encode(SightFailed("blocked", id = "f1", ts = ts))).jsonObject
+        assertEquals(setOf("type", "id", "ts", "reason"), f.keys)
+        assertEquals("sight_failed", f["type"]!!.jsonPrimitive.content)
+        assertEquals("f1", f["id"]!!.jsonPrimitive.content)
+        assertEquals("blocked", f["reason"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun decode_look() {
+        assertEquals(Look(), Protocol.decodeAction("""{"type":"look"}"""))
+        assertEquals(Look("7"), Protocol.decodeAction("""{"type":"look","id":"7","ts":"2026-10-28T09:00:00Z"}"""))
+    }
+
     @Test fun unknown_action_ignored() {
         assertNull(Protocol.decodeAction("""{"type":"move","intent":"fly"}"""))
         assertNull(Protocol.decodeAction("""{"type":"move","intent":"fly","target":"send"}"""))

@@ -23,7 +23,15 @@ data class Target(val tag: String, val bounds: Box)
 /** A top edge she can stand on, spanning [left]..[right] at y = [top]; [tag] when it is a tease target. */
 data class Platform(val left: Int, val right: Int, val top: Int, val tag: String? = null)
 
-data class Layout(val platforms: List<Platform>, val targets: List<Target>) {
+/**
+ * What the screen shows. [images] are the boxes of the visible image nodes at least `minImagePx`
+ * in both directions, clipped to the screen, largest first, at most 40 (for the picture-heavy rule).
+ */
+data class Layout(
+    val platforms: List<Platform>,
+    val targets: List<Target>,
+    val images: List<Box> = emptyList(),
+) {
     companion object {
         val EMPTY = Layout(emptyList(), emptyList())
     }
@@ -79,6 +87,7 @@ fun tagOf(n: UiNode): String? {
 }
 
 private const val MAX_PLATFORMS = 30
+private const val MAX_IMAGES = 40
 private const val MERGE_TOLERANCE_PX = 4
 
 /**
@@ -89,6 +98,8 @@ private const val MERGE_TOLERANCE_PX = 4
  * (`top - spriteH >= statusBarH`) and it does not start at or below [keyboardTop]. Edges within 4 px
  * in y that overlap or touch in x merge (a target's tag survives); tagged ones always survive the cap of 30 and
  * come first, then the widest others, widest first. Targets are the clickable nodes that carry a tease tag. The floor is not included.
+ * Image boxes are clipped to the screen (`screenW` wide, [screenH] high when given) before the
+ * size check; the layout keeps the 40 largest.
  */
 fun buildLayout(
     nodes: List<UiNode>,
@@ -98,14 +109,21 @@ fun buildLayout(
     statusBarH: Int,
     keyboardTop: Int?,
     minImagePx: Int,
+    screenH: Int = Int.MAX_VALUE,
 ): Layout {
     val targets = ArrayList<Target>()
+    val images = ArrayList<Box>()
     val edges = ArrayList<Platform>()
     for (n in nodes) {
         val b = n.bounds
         // a target is a button: a node spanning more than half the screen is a card or a row, not one
         val tag = if (n.clickable && b.width * 2 <= screenW) tagOf(n) else null
         if (tag != null && b.width > 0 && b.height > 0) targets.add(Target(tag, b))
+
+        if (n.image) {
+            val clipped = Box(maxOf(b.left, 0), maxOf(b.top, 0), minOf(b.right, screenW), minOf(b.bottom, screenH))
+            if (clipped.width >= minImagePx && clipped.height >= minImagePx) images.add(clipped)
+        }
 
         val big = n.clickable || n.editable || (n.image && b.width >= minImagePx && b.height >= minImagePx)
         if (!big) continue
@@ -122,7 +140,8 @@ fun buildLayout(
         .partition { it.tag != null }
     val platforms = (tagged.take(MAX_PLATFORMS) + plain).take(MAX_PLATFORMS)
     targets.sortWith(compareBy<Target>({ it.bounds.top }, { it.bounds.left }))
-    return Layout(platforms, targets)
+    val largest = images.sortedByDescending { it.width.toLong() * it.height }.take(MAX_IMAGES)
+    return Layout(platforms, targets, largest)
 }
 
 private fun merge(edges: List<Platform>): List<Platform> {

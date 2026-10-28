@@ -16,8 +16,8 @@ class LayoutTest {
         text: String? = null,
     ) = UiNode(box, clickable, editable, image, viewId, description, text)
 
-    private fun build(nodes: List<UiNode>, keyboardTop: Int? = null) =
-        buildLayout(nodes, SCREEN_W, SPRITE_W, SPRITE_H, STATUS_H, keyboardTop, MIN_IMG)
+    private fun build(nodes: List<UiNode>, keyboardTop: Int? = null, screenH: Int = Int.MAX_VALUE) =
+        buildLayout(nodes, SCREEN_W, SPRITE_W, SPRITE_H, STATUS_H, keyboardTop, MIN_IMG, screenH)
 
     @Test fun box_geometry() {
         val b = Box(10, 20, 110, 70)
@@ -258,6 +258,37 @@ class LayoutTest {
         assertEquals("like", tagOf(node(b, description = "أَعْجَبَنِي")))
         assertEquals("search", tagOf(node(b, text = "بَحْث")))
         assertEquals("follow", tagOf(node(b, text = "مُتَابَعَة")))
+    }
+
+    @Test fun layout_reports_images() {
+        val big = Box(0, 400, 600, 900)
+        val small = Box(0, 100, 40, 140)
+        val l = build(
+            listOf(
+                node(Box(0, 300, 200, 500), image = true),
+                node(big, image = true),
+                node(small, image = true),
+                node(Box(0, 1000, 500, 1400), clickable = true),
+                node(Box(900, 500, 1500, 800), image = true),
+            ),
+            screenH = 2000,
+        )
+        // largest first; below-min and non-image nodes dropped; clipped to the screen width
+        assertEquals(listOf(big, Box(900, 500, 1080, 800), Box(0, 300, 200, 500)), l.images)
+        assertEquals(emptyList<Box>(), Layout.EMPTY.images)
+        assertEquals(emptyList<Box>(), build(emptyList()).images)
+        // clipped to the screen height too
+        assertEquals(listOf(Box(0, 1800, 500, 2000)), build(listOf(node(Box(0, 1800, 500, 2400), image = true)), screenH = 2000).images)
+        // fully off screen: dropped
+        assertEquals(emptyList<Box>(), build(listOf(node(Box(1100, 0, 1500, 500), image = true)), screenH = 2000).images)
+    }
+
+    @Test fun layout_images_capped_at_40_largest_first() {
+        val nodes = (1..50).map { i -> node(Box(0, 100 + i * 10, 100 + i, 100 + i * 10 + 100), image = true) }
+        val l = build(nodes, screenH = 5000)
+        assertEquals(40, l.images.size)
+        assertEquals(150, l.images.first().width)
+        assertEquals(111, l.images.last().width)
     }
 
     @Test fun empty_layout() {

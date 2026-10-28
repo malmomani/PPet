@@ -129,6 +129,26 @@ data class BodyMoment(
     override val ts: Instant = Instant.now(),
 ) : Event
 
+/**
+ * A screenshot of the app the user is in, as base64 JPEG ([imageB64]); [reason] is `auto` or `asked`.
+ * RAM only, never queued offline.
+ */
+data class Sight(
+    val packageName: String,
+    val app: String,
+    val reason: String,
+    val imageB64: String,
+    override val id: String = newId(),
+    override val ts: Instant = Instant.now(),
+) : Event
+
+/** An asked look that could not happen: [reason] is `blocked` or `error`. Never queued offline. */
+data class SightFailed(
+    val reason: String,
+    override val id: String = newId(),
+    override val ts: Instant = Instant.now(),
+) : Event
+
 data class OfflineSummary(
     val events: List<Event>,
     val since: Instant,
@@ -155,6 +175,9 @@ data class ErrorMsg(val code: String, val message: String) : Action
 
 /** [intent] is one of [MOVE_INTENTS]; [target] is a tease tag, always set for [TEASE_INTENTS]. */
 data class Move(val intent: String, val target: String? = null) : Action
+
+/** The brain asks her to look at the screen now; [id] is the brain message id, "" when absent. */
+data class Look(val id: String = "") : Action
 
 /** Moves the brain can ask for (same as the brain). [TEASE_INTENTS] need a target. */
 val MOVE_INTENTS: List<String> = listOf(
@@ -221,6 +244,13 @@ object Protocol {
                 put("kind", e.kind)
                 put("target", e.target)
             }
+            is Sight -> {
+                put("package", e.packageName)
+                put("app", e.app)
+                put("reason", e.reason)
+                put("image_b64", e.imageB64)
+            }
+            is SightFailed -> put("reason", e.reason)
             is OfflineSummary -> {
                 put("events", JsonArray(e.events.map { encodeObject(it) }))
                 put("since", fmt(e.since))
@@ -242,6 +272,8 @@ object Protocol {
         is Glance -> "glance"
         is Body -> "body"
         is BodyMoment -> "body_moment"
+        is Sight -> "sight"
+        is SightFailed -> "sight_failed"
         is OfflineSummary -> "offline_summary"
     }
 
@@ -281,6 +313,7 @@ object Protocol {
                 if (intent in TEASE_INTENTS && target == null) return null
                 Move(intent, target)
             }
+            "look" -> Look(o.str("id") ?: "")
             else -> null
         }
     }

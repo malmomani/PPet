@@ -37,6 +37,7 @@ import com.maya.core.Event
 import com.maya.core.Gesture
 import com.maya.core.HOLD_TO_TALK_MS
 import com.maya.core.Layout
+import com.maya.core.Look
 import com.maya.core.Move
 import com.maya.core.Say
 import com.maya.core.State
@@ -200,6 +201,7 @@ class OverlayBody(
             is ErrorMsg -> Unit // the service handles auth errors
             // Ignored by Behavior while she is held, thrown or disconnected.
             is Move -> behavior.command(a.intent, a.target)
+            is Look -> Unit // handled by the service (screenshot)
         }
     }
 
