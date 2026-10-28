@@ -34,7 +34,8 @@ timeout_s = 120.0
 keep_alive = "30m"
 # Timeout for loading the models at startup, in seconds.
 warmup_timeout_s = 300.0
-# Thinking mode for models that support it (true or false).
+# Thinking mode for models that support it (true or false). Also sent to local OpenAI-compatible
+# servers such as llama-server (not to api.openai.com); remove the line to leave it to the server.
 think = false
 # Sampling temperature for chat.
 temperature = 0.8

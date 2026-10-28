@@ -54,6 +54,12 @@ def _local_ipv4s() -> list[str]:
 def build_backends(cfg: Config) -> tuple[LLM, Describer | None]:
     """Pick the chat/embedding backend and the (optional) screenshot describer from the config."""
     llm = make_llm(cfg.llm)
+    if cfg.llm.provider.strip().lower() == "openai" and cfg.llm.base_url.rstrip("/") == "http://localhost:11434":
+        log.warning(
+            "[llm] provider is \"openai\" but base_url is still Ollama's address (%s); "
+            "llama-server normally listens on http://localhost:8080/v1",
+            cfg.llm.base_url,
+        )
     describer = make_describer(cfg)
     vision = "off" if describer is None else f"on (model {vision_model(cfg)})"
     log.info(

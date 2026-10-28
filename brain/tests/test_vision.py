@@ -112,3 +112,20 @@ async def test_fake_describer():
     assert await d.describe(IMG) == "one" and await d.describe(IMG) == "two" and await d.describe(IMG) == "two"
     assert d.calls == [IMG, IMG, IMG]
     assert await FakeDescriber(None).describe(IMG) is None
+
+
+async def test_describe_openai_think_kwargs_and_stray_closing_think():
+    bodies = []
+
+    def handler(req):
+        bodies.append(json.loads(req.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "thoughts</think> A dog."}}]})
+
+    cfg = cfg_for("openai")
+    cfg.llm.think = False
+    assert await make_describer(cfg, transport=httpx.MockTransport(handler)).describe(IMG) == "A dog."
+    assert bodies[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+    cfg.llm.base_url = "https://api.openai.com/v1"
+    await make_describer(cfg, transport=httpx.MockTransport(handler)).describe(IMG)
+    assert "chat_template_kwargs" not in bodies[1]

@@ -6,7 +6,7 @@ from typing import Protocol
 import httpx
 
 from maya_brain.config import Config
-from maya_brain.llm import _strip_think
+from maya_brain.llm import openai_think_fields, strip_reasoning
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def vision_model(cfg: Config) -> str:
 
 
 def _trim(text: str) -> str | None:
-    text = " ".join(_strip_think(text).split())
+    text = " ".join(strip_reasoning(text).split())
     if not text:
         return None
     if len(text) > MAX_DESCRIPTION_CHARS:
@@ -74,6 +74,7 @@ class OpenAIDescriber(_HTTPDescriber):
             ]}],
             "temperature": llm.temperature,
             "stream": False,
+            **openai_think_fields(llm),
         }
         headers = {"Authorization": f"Bearer {llm.api_key}"} if llm.api_key else {}
         return f"{llm.base_url.rstrip('/')}/chat/completions", payload, headers

@@ -140,6 +140,8 @@ Ollama and `qwen3:8b` work out of the box. If you have a strong PC, you can give
    ```
 
    `-hf` downloads the model **and its vision projector** on the first run (it is a big download, so be patient). Repository and quantisation names change often, so check them on [Hugging Face](https://huggingface.co/unsloth) and adjust the part after `-hf` if needed. Leave this window open while Maya runs.
+
+   Thinking: Maya sends `think = false` from `maya.toml` with every request, which switches the model's thinking off. To make the server do the same for every client, add `--reasoning-budget 0` (or `--chat-template-kwargs '{"enable_thinking":false}'`) to the command. Either way, verify on your PC that replies come back quickly (see the speed check below).
 3. Tune `--n-cpu-moe`: it is the number of layers whose experts stay in system RAM. A **lower** number is faster, until the graphics card runs out of memory (then the server fails to start or slows to a crawl); raise it by a few and retry. Lower `-c` if you are still short of VRAM.
 4. Keep Ollama running too: embeddings (her memory search) still come from `nomic-embed-text` there (`ollama pull nomic-embed-text`).
 5. In `maya.toml`:

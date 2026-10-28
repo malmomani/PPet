@@ -25,7 +25,10 @@ async def test_openai_chat_request_shape():
     assert await llm.chat(msgs) == "hello"
     req, body = seen[0]
     assert str(req.url) == "http://localhost:8080/v1/chat/completions"
-    assert body == {"model": "qwen3.6-35b-a3b", "messages": msgs, "temperature": 0.5, "stream": False}
+    assert body == {
+        "model": "qwen3.6-35b-a3b", "messages": msgs, "temperature": 0.5, "stream": False,
+        "chat_template_kwargs": {"enable_thinking": False},  # think defaults to false
+    }
     assert "authorization" not in req.headers
 
     await llm.chat(msgs, json_mode=True)
@@ -86,13 +89,53 @@ async def test_openai_embeds_via_ollama():
             await llm.embed("x")
 
 
-async def test_openai_warm_up_is_one_tiny_chat():
+async def test_openai_warm_up_is_one_tiny_chat_and_warms_embeddings():
     seen = []
-    llm = OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(lambda r: seen.append(r.url.path) or reply()))
-    await llm.warm_up()
-    assert seen == ["/v1/chat/completions"]
+
+    def handler(req):
+        seen.append(req.url.path)
+        if req.url.path == "/api/embed":
+            return httpx.Response(200, json={"embeddings": [[0.1]]})
+        return reply()
+
+    await OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(handler)).warm_up()
+    assert seen == ["/v1/chat/completions", "/api/embed"]
     with pytest.raises(LLMError):
         await OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(lambda r: httpx.Response(503))).warm_up()
+
+
+async def test_openai_think_kwargs_gated_by_host():
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        if req.url.path == "/api/embed":
+            return httpx.Response(200, json={"embeddings": [[0.1]]})
+        return reply()
+
+    async def run(**kw):
+        seen.clear()
+        llm = OpenAILLM(LLMConfig(**{**OPENAI, **kw}), transport=httpx.MockTransport(handler))
+        await llm.chat([])
+        chat = seen[0]
+        seen.clear()
+        await llm.warm_up()
+        return chat, seen[0]
+
+    for body in await run(think=False):
+        assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    for body in await run(think=True, base_url="http://192.168.1.5:8080/v1"):
+        assert body["chat_template_kwargs"] == {"enable_thinking": True}
+    for url in ("https://api.openai.com/v1", "https://x.openai.azure.com/openai", "https://eu.openai.com/v1"):
+        for body in await run(think=False, base_url=url):
+            assert "chat_template_kwargs" not in body
+    for body in await run(think=None):
+        assert "chat_template_kwargs" not in body
+
+
+async def test_openai_keeps_text_after_last_closing_think():
+    llm = OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(lambda r: reply("reasoning without opener</think>\n\nfinal")))
+    assert (await llm.chat([])).strip() == "final"
 
 
 def test_make_llm_picks_provider():
@@ -145,3 +188,17 @@ def test_main_refuses_unknown_provider(tmp_path, capsys):
     cfg.write_text('[server]\ntoken = "a-long-enough-secret"\n[llm]\nprovider = "gemini"\n')
     assert entry.main(["--config", str(cfg)]) == 2
     assert "provider" in capsys.readouterr().err
+
+
+def test_build_backends_warns_when_openai_points_at_ollama(caplog):
+    import logging
+
+    from maya_brain.__main__ import build_backends
+
+    caplog.set_level(logging.WARNING, logger="maya_brain")
+    build_backends(Config(llm=LLMConfig(provider="openai", base_url="http://localhost:11434/")))
+    assert "11434" in caplog.text and "8080" in caplog.text
+    caplog.clear()
+    build_backends(Config(llm=LLMConfig(**OPENAI)))
+    build_backends(Config())
+    assert caplog.text == ""

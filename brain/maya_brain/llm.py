@@ -4,6 +4,7 @@ import re
 import zlib
 from collections.abc import Callable
 from typing import Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -32,6 +33,26 @@ class LLM(Protocol):
 
 def _strip_think(text: str) -> str:
     return _THINK_RE.sub("", text)
+
+
+def strip_reasoning(text: str) -> str:
+    """Drop <think> blocks; if only a closing tag shows up (the opener was eaten), keep what follows the last one."""
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    return _strip_think(text)
+
+
+_HOSTED_OPENAI_SUFFIXES = ("openai.com", "openai.azure.com")
+
+
+def openai_think_fields(cfg: LLMConfig) -> dict:
+    """llama-server style `chat_template_kwargs` for `think`; hosted OpenAI/Azure endpoints would reject it."""
+    if cfg.think is None:
+        return {}
+    host = (urlparse(cfg.base_url).hostname or "").lower()
+    if any(host == suffix or host.endswith("." + suffix) for suffix in _HOSTED_OPENAI_SUFFIXES):
+        return {}
+    return {"chat_template_kwargs": {"enable_thinking": cfg.think}}
 
 
 def extract_json(text: str) -> dict:
@@ -137,7 +158,7 @@ class OpenAILLM:
             raise LLMError("/chat/completions returned unexpected shape") from e
         if not isinstance(content, str):
             raise LLMError("/chat/completions returned unexpected shape")
-        return _strip_think(content)
+        return strip_reasoning(content)
 
     async def chat(self, messages: list[dict], json_mode: bool = False) -> str:
         payload: dict = {
@@ -145,6 +166,7 @@ class OpenAILLM:
             "messages": messages,
             "temperature": self.cfg.temperature,
             "stream": False,
+            **openai_think_fields(self.cfg),
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -162,14 +184,17 @@ class OpenAILLM:
             raise LLMError("/api/embed returned unexpected shape") from e
 
     async def warm_up(self) -> None:
-        """One tiny request so the first real message isn't stuck behind a cold start."""
+        """One tiny chat request, then the Ollama embedding model, so the first real message isn't stuck."""
         payload = {
             "model": self.cfg.chat_model,
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 1,
             "stream": False,
+            **openai_think_fields(self.cfg),
         }
         await self._chat(payload, self.cfg.warmup_timeout_s)
+        embed = {"model": self.cfg.embed_model, "input": "hello", "keep_alive": self.cfg.keep_alive}
+        await self._post(f"{self.cfg.embed_base_url.rstrip('/')}/api/embed", embed, timeout_s=self.cfg.warmup_timeout_s)
 
 
 def make_llm(cfg: LLMConfig, transport: httpx.AsyncBaseTransport | None = None) -> "OllamaLLM | OpenAILLM":
