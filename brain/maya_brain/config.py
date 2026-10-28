@@ -18,6 +18,9 @@ class ServerConfig:
 
 @dataclass
 class LLMConfig:
+    provider: str = "ollama"  # "ollama" or "openai" (any OpenAI-compatible server, e.g. llama-server)
+    api_key: str = ""
+    embed_base_url: str = "http://localhost:11434"  # embeddings always come from Ollama
     base_url: str = "http://localhost:11434"
     chat_model: str = "qwen3:8b"
     embed_model: str = "nomic-embed-text"
@@ -65,6 +68,13 @@ class VoiceConfig:
 
 
 @dataclass
+class VisionConfig:
+    enabled: bool = True
+    model: str = ""  # empty: the chat model (openai) or gemma3:4b (ollama)
+    max_side: int = 1024
+
+
+@dataclass
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -72,6 +82,7 @@ class Config:
     initiative: InitiativeConfig = field(default_factory=InitiativeConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
     db_path: str = "maya.db"
 
 

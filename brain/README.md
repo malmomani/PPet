@@ -128,6 +128,36 @@ python -m maya_brain.sim --voice
 
 Use `/say-voice <text>` to hear any sentence. With `--fake-llm --voice` the simulator uses a silent stand-in voice, which is handy for checking the plumbing. Audio is generated on your PC and sent to your phone; nothing goes to a cloud service.
 
+## Bigger brain with llama-server (optional)
+
+Ollama and `qwen3:8b` work out of the box. If you have a strong PC, you can give Maya a much bigger model that also **sees pictures**: the Mixture-of-Experts model Qwen3.6-35B-A3B served by [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. Only about 3 billion of its 35 billion parameters are active per word, and `--n-cpu-moe` keeps the experts in system RAM, so it can run on an 8 GB graphics card with plenty of RAM (the reference setup is an RTX 3070 8 GB with 32 GB DDR5). Maya talks to it through the OpenAI-style API (`provider = "openai"`).
+
+1. Download the llama.cpp Windows release zip that matches your graphics card (the CUDA build for NVIDIA) from the [releases page](https://github.com/ggml-org/llama.cpp/releases) and unzip it, for example to `C:\llama.cpp`.
+2. Open PowerShell in that folder and start the server:
+
+   ```
+   .\llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-IQ4_XS --jinja -ngl 99 --n-cpu-moe 28 -c 16384 --port 8080
+   ```
+
+   `-hf` downloads the model **and its vision projector** on the first run (it is a big download, so be patient). Repository and quantisation names change often, so check them on [Hugging Face](https://huggingface.co/unsloth) and adjust the part after `-hf` if needed. Leave this window open while Maya runs.
+3. Tune `--n-cpu-moe`: it is the number of layers whose experts stay in system RAM. A **lower** number is faster, until the graphics card runs out of memory (then the server fails to start or slows to a crawl); raise it by a few and retry. Lower `-c` if you are still short of VRAM.
+4. Keep Ollama running too: embeddings (her memory search) still come from `nomic-embed-text` there (`ollama pull nomic-embed-text`).
+5. In `maya.toml`:
+
+   ```toml
+   [llm]
+   provider = "openai"
+   base_url = "http://localhost:8080/v1"
+   chat_model = "qwen3.6-35b-a3b"
+   embed_base_url = "http://localhost:11434"
+   embed_model = "nomic-embed-text"
+   ```
+
+   With this provider screenshots are described by the same model (`[vision] model` is empty). Set `[vision] enabled = false` to switch picture descriptions off.
+6. Check the speed: run `python -m maya_brain.sim`, send a test message and see how long the reply takes. Speeds quoted online for this kind of setup are community reports; verify them on your own PC and adjust `--n-cpu-moe` accordingly.
+
+**Privacy:** `provider = "openai"` is meant for a server on your own PC. If you point `base_url` at a cloud API instead, Maya's prompts (chats, memories, screen text and picture descriptions) go to that provider.
+
 ## Run the server
 
 ```
@@ -146,7 +176,7 @@ The Android app that shows Maya on your phone has its own install and pairing gu
 
 ## Privacy
 
-Everything stays on your machine. Conversations, memories, facts, traits and the diary are stored in the SQLite file `maya.db` (the simulator uses `maya-sim.db`), and the language model runs locally through Ollama. Nothing is sent to a cloud service. Delete the file to make Maya forget everything.
+Everything stays on your machine. Conversations, memories, facts, traits and the diary are stored in the SQLite file `maya.db` (the simulator uses `maya-sim.db`), and the language model runs locally through Ollama (or llama-server, if you set it up). Nothing is sent to a cloud service unless you point `base_url` at one (see above). Delete the file to make Maya forget everything.
 
 ## Tests
 

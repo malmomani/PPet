@@ -12,13 +12,16 @@ from pathlib import Path
 import uvicorn
 
 from .clock import SystemClock
-from .config import load_config
+from .config import Config, load_config
 from .db import open_db
 from .gateway import create_app
-from .llm import LLMError, OllamaLLM
+from .llm import LLM, LLMError, make_llm
 from .mind import Mind
 from .tts import load_kokoro
+from .vision import Describer, make_describer, vision_model
 
+
+log = logging.getLogger("maya_brain")
 
 MIN_TOKEN_LEN = 16
 _TOKEN_RE = re.compile(r"(token=)[^&\s\"']*")
@@ -48,6 +51,18 @@ def _local_ipv4s() -> list[str]:
     return list(dict.fromkeys(ips))
 
 
+def build_backends(cfg: Config) -> tuple[LLM, Describer | None]:
+    """Pick the chat/embedding backend and the (optional) screenshot describer from the config."""
+    llm = make_llm(cfg.llm)
+    describer = make_describer(cfg)
+    vision = "off" if describer is None else f"on (model {vision_model(cfg)})"
+    log.info(
+        "LLM provider %s, chat model %s at %s; vision %s",
+        cfg.llm.provider, cfg.llm.chat_model, cfg.llm.base_url, vision,
+    )
+    return llm, describer
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="maya_brain", description="Maya brain server")
     parser.add_argument("--config", default="maya.toml", help="path to config TOML (default: maya.toml)")
@@ -66,12 +81,17 @@ def main(argv: list[str] | None = None) -> int:
     for handler in logging.getLogger().handlers:
         handler.addFilter(REDACT_TOKENS)  # covers uvicorn's records too: they propagate to root
 
-    llm = OllamaLLM(cfg.llm)
+    try:
+        llm, describer = build_backends(cfg)  # describer: Task 2 hands it to Mind
+    except ValueError as e:
+        print(f"Refusing to start: {e}", file=sys.stderr)
+        return 2
     print("Loading Maya's models (the first time can take a minute)...")
     try:
         asyncio.run(llm.warm_up())
     except LLMError as e:
-        print(f"Warning: can't reach Ollama at {cfg.llm.base_url} yet ({e}); starting anyway.", file=sys.stderr)
+        server = "Ollama" if cfg.llm.provider.strip().lower() == "ollama" else "the language model server"
+        print(f"Warning: can't reach {server} at {cfg.llm.base_url} yet ({e}); starting anyway.", file=sys.stderr)
     db = open_db(cfg.db_path)
     tts = load_kokoro(cfg.voice, base_dir=Path(args.config).resolve().parent)
     if tts is not None:

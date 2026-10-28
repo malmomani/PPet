@@ -107,6 +107,8 @@ New-NetFirewallRule -DisplayName "Maya brain" -Direction Inbound -Protocol TCP -
 
 Then make sure your Wi-Fi is set to **Private**: Settings → Network & internet → Wi-Fi → your network → Private network.
 
+**Bigger brain (optional).** The default model (`qwen3:8b` on Ollama) works on most PCs. With a strong PC (for example an RTX 3070 8 GB and 32 GB of RAM) you can give Maya a much bigger model that can also look at pictures, using llama.cpp's `llama-server`. The full steps are in [`brain/README.md`](brain/README.md#bigger-brain-with-llama-server-optional).
+
 ---
 
 ## Part 2: Install the app on your phone
@@ -194,7 +196,7 @@ More is in [`android/README.md#troubleshooting`](android/README.md#troubleshooti
 
 ## Privacy
 
-- Everything stays between your phone and **your own PC**. The AI runs locally through Ollama.
+- Everything stays between your phone and **your own PC**. The AI runs locally through Ollama (or llama-server). Pointing the brain at a cloud AI service in `maya.toml` would send her prompts there; the default does not.
 - **Never use a router port-forward** to reach the brain from outside. Use Tailscale instead.
 - **Notifications:** she sees only the app name and sender, never the message text.
 - **Screen:** she never reads passwords, what you type, do-not-watch apps or the lock screen. Only a short headline per glance goes into her memory; the full text is never saved.

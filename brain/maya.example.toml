@@ -13,12 +13,21 @@ port = 8765
 token = "change-me"
 
 [llm]
-# Base URL of the Ollama server.
+# Which kind of server answers chat: "ollama" (default) or "openai" (any OpenAI-compatible
+# server, e.g. llama.cpp's llama-server; see "Bigger brain with llama-server" in README.md).
+provider = "ollama"
+# Base URL of the chat server (Ollama: http://localhost:11434; llama-server: http://localhost:8080/v1).
 base_url = "http://localhost:11434"
+# Only for provider = "openai": API key, if the server wants one (leave empty for a local server).
+# A cloud API sends Maya's prompts (chats, memories, screen text) to that company.
+api_key = ""
 # Model used for chat and thought generation.
 chat_model = "qwen3:8b"
-# Model used for embeddings (memory search).
+# Model used for embeddings (memory search). Embeddings always come from Ollama,
+# even with provider = "openai", so Ollama must keep running for this model.
 embed_model = "nomic-embed-text"
+# Where Ollama runs for embeddings (only used when provider = "openai").
+embed_base_url = "http://localhost:11434"
 # Per-request timeout in seconds (generous: a cold model load can take a while).
 timeout_s = 120.0
 # How long Ollama keeps the models loaded after the last request ("30m", "2h", "-1" = forever).
@@ -31,7 +40,24 @@ think = false
 temperature = 0.8
 # Context window (tokens) for chat. Ollama's own default is much smaller and would
 # silently cut off Maya's prompt; lower this only if the model doesn't fit in VRAM.
+# (With provider = "openai" the context size is set on the server, e.g. llama-server -c 16384.)
 num_ctx = 8192
+
+# Bigger brain (optional): llama-server with the Qwen3.6-35B-A3B model. Replace the [llm] values above with:
+#   provider = "openai"
+#   base_url = "http://localhost:8080/v1"
+#   chat_model = "qwen3.6-35b-a3b"
+#   embed_base_url = "http://localhost:11434"   # embeddings still come from Ollama
+#   embed_model = "nomic-embed-text"
+
+[vision]
+# Let Maya look at screenshots the phone sends (only when she is allowed to look).
+enabled = true
+# Model that describes a screenshot. Empty = the chat model with provider = "openai",
+# or "gemma3:4b" with provider = "ollama".
+model = ""
+# Longest side (pixels) of the screenshots the phone sends.
+max_side = 1024
 
 [persona]
 # The companion's name.

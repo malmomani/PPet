@@ -108,6 +108,79 @@ class OllamaLLM:
         await self._post("/api/embed", embed, timeout)
 
 
+class OpenAILLM:
+    """Chat through any OpenAI-compatible server (llama-server, LM Studio, ...). Embeddings stay on Ollama."""
+
+    def __init__(self, cfg: LLMConfig, transport: httpx.AsyncBaseTransport | None = None):
+        self.cfg = cfg
+        self._transport = transport
+
+    async def _post(self, url: str, payload: dict, headers: dict | None = None, timeout_s: float | None = None) -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s or self.cfg.timeout_s, transport=self._transport) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except (httpx.HTTPError, ValueError) as e:
+            raise LLMError(f"{url} failed: {e!r}") from e
+        if not isinstance(data, dict):
+            raise LLMError(f"{url} returned unexpected shape")
+        return data
+
+    async def _chat(self, payload: dict, timeout_s: float | None = None) -> str:
+        headers = {"Authorization": f"Bearer {self.cfg.api_key}"} if self.cfg.api_key else None
+        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
+        data = await self._post(url, payload, headers, timeout_s)
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise LLMError("/chat/completions returned unexpected shape") from e
+        if not isinstance(content, str):
+            raise LLMError("/chat/completions returned unexpected shape")
+        return _strip_think(content)
+
+    async def chat(self, messages: list[dict], json_mode: bool = False) -> str:
+        payload: dict = {
+            "model": self.cfg.chat_model,
+            "messages": messages,
+            "temperature": self.cfg.temperature,
+            "stream": False,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return await self._chat(payload)
+
+    async def embed(self, text: str) -> list[float]:
+        url = f"{self.cfg.embed_base_url.rstrip('/')}/api/embed"
+        data = await self._post(
+            url, {"model": self.cfg.embed_model, "input": text, "keep_alive": self.cfg.keep_alive}
+        )
+        try:
+            vec = data["embeddings"][0]
+            return [float(x) for x in vec]
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            raise LLMError("/api/embed returned unexpected shape") from e
+
+    async def warm_up(self) -> None:
+        """One tiny request so the first real message isn't stuck behind a cold start."""
+        payload = {
+            "model": self.cfg.chat_model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+            "stream": False,
+        }
+        await self._chat(payload, self.cfg.warmup_timeout_s)
+
+
+def make_llm(cfg: LLMConfig, transport: httpx.AsyncBaseTransport | None = None) -> "OllamaLLM | OpenAILLM":
+    provider = cfg.provider.strip().lower()
+    if provider == "ollama":
+        return OllamaLLM(cfg, transport)
+    if provider == "openai":
+        return OpenAILLM(cfg, transport)
+    raise ValueError(f"unknown [llm] provider {cfg.provider!r} (use \"ollama\" or \"openai\")")
+
+
 class FakeLLM:
     def __init__(self, replies: list[str] | Callable[[list[dict]], str] | None = None):
         self.replies = replies

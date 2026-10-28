@@ -1,0 +1,147 @@
+import json
+
+import httpx
+import pytest
+
+from maya_brain.config import Config, LLMConfig, VisionConfig, load_config
+from maya_brain.llm import LLMError, OllamaLLM, OpenAILLM, make_llm
+
+OPENAI = dict(provider="openai", base_url="http://localhost:8080/v1", chat_model="qwen3.6-35b-a3b")
+
+
+def reply(content="hi"):
+    return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": content}}]})
+
+
+async def test_openai_chat_request_shape():
+    seen = []
+
+    def handler(req):
+        seen.append((req, json.loads(req.content)))
+        return reply("hello")
+
+    msgs = [{"role": "user", "content": "x"}]
+    llm = OpenAILLM(LLMConfig(**OPENAI, temperature=0.5), transport=httpx.MockTransport(handler))
+    assert await llm.chat(msgs) == "hello"
+    req, body = seen[0]
+    assert str(req.url) == "http://localhost:8080/v1/chat/completions"
+    assert body == {"model": "qwen3.6-35b-a3b", "messages": msgs, "temperature": 0.5, "stream": False}
+    assert "authorization" not in req.headers
+
+    await llm.chat(msgs, json_mode=True)
+    assert seen[1][1]["response_format"] == {"type": "json_object"}
+
+    keyed = OpenAILLM(LLMConfig(**OPENAI, api_key="sk-test"), transport=httpx.MockTransport(handler))
+    await keyed.chat(msgs)
+    assert seen[2][0].headers["authorization"] == "Bearer sk-test"
+
+
+async def test_openai_trailing_slash_in_base_url():
+    seen = []
+    cfg = LLMConfig(**{**OPENAI, "base_url": "http://localhost:8080/v1/"})
+    llm = OpenAILLM(cfg, transport=httpx.MockTransport(lambda r: seen.append(str(r.url)) or reply()))
+    await llm.chat([])
+    assert seen == ["http://localhost:8080/v1/chat/completions"]
+
+
+async def test_openai_strips_think_and_errors():
+    llm = OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(lambda r: reply("<think>hmm</think>ok")))
+    assert (await llm.chat([])).strip() == "ok"
+
+    bad = [
+        httpx.Response(500),
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json={"nope": 1}),
+        httpx.Response(200, json={"choices": []}),
+        httpx.Response(200, json={"choices": [{"message": {"content": None}}]}),
+    ]
+    for resp in bad:
+        llm = OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(lambda r, resp=resp: resp))
+        with pytest.raises(LLMError):
+            await llm.chat([])
+
+    def boom(r):
+        raise httpx.ConnectError("down")
+
+    with pytest.raises(LLMError):
+        await OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(boom)).chat([])
+
+
+async def test_openai_embeds_via_ollama():
+    seen = {}
+
+    def handler(req):
+        seen["url"] = str(req.url)
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+
+    cfg = LLMConfig(**OPENAI, embed_base_url="http://ollama:11434")
+    assert await OpenAILLM(cfg, transport=httpx.MockTransport(handler)).embed("x") == [0.1, 0.2]
+    assert seen["url"] == "http://ollama:11434/api/embed"
+    assert seen["body"]["model"] == "nomic-embed-text" and seen["body"]["input"] == "x"
+
+    for resp in (httpx.Response(500), httpx.Response(200, json={"nope": 1})):
+        llm = OpenAILLM(cfg, transport=httpx.MockTransport(lambda r, resp=resp: resp))
+        with pytest.raises(LLMError):
+            await llm.embed("x")
+
+
+async def test_openai_warm_up_is_one_tiny_chat():
+    seen = []
+    llm = OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(lambda r: seen.append(r.url.path) or reply()))
+    await llm.warm_up()
+    assert seen == ["/v1/chat/completions"]
+    with pytest.raises(LLMError):
+        await OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(lambda r: httpx.Response(503))).warm_up()
+
+
+def test_make_llm_picks_provider():
+    assert isinstance(make_llm(LLMConfig()), OllamaLLM)
+    assert isinstance(make_llm(LLMConfig(provider="openai")), OpenAILLM)
+    assert isinstance(make_llm(LLMConfig(provider=" OpenAI ")), OpenAILLM)
+    with pytest.raises(ValueError, match="provider"):
+        make_llm(LLMConfig(provider="gemini"))
+
+
+def test_config_defaults_and_toml(tmp_path):
+    cfg = Config()
+    assert cfg.llm.provider == "ollama" and cfg.llm.api_key == ""
+    assert cfg.llm.embed_base_url == "http://localhost:11434"
+    assert cfg.vision == VisionConfig(enabled=True, model="", max_side=1024)
+
+    p = tmp_path / "m.toml"
+    p.write_text(
+        '[llm]\nprovider="openai"\nbase_url="http://localhost:8080/v1"\napi_key="k"\n'
+        'embed_base_url="http://10.0.0.2:11434"\n[vision]\nenabled=false\nmodel="m"\nmax_side=512\n'
+    )
+    loaded = load_config(p)
+    assert (loaded.llm.provider, loaded.llm.api_key) == ("openai", "k")
+    assert loaded.llm.embed_base_url == "http://10.0.0.2:11434"
+    assert loaded.vision == VisionConfig(enabled=False, model="m", max_side=512)
+
+
+def test_build_backends_logs_provider_and_vision(caplog):
+    import logging
+
+    from maya_brain.__main__ import build_backends
+    from maya_brain.vision import make_describer
+
+    caplog.set_level(logging.INFO, logger="maya_brain")
+    cfg = Config(llm=LLMConfig(**OPENAI))
+    llm, describer = build_backends(cfg)
+    assert isinstance(llm, OpenAILLM) and describer is not None
+    assert "openai" in caplog.text and "qwen3.6-35b-a3b" in caplog.text and "vision on" in caplog.text
+
+    caplog.clear()
+    llm, describer = build_backends(Config(vision=VisionConfig(enabled=False)))
+    assert isinstance(llm, OllamaLLM) and describer is None and "vision off" in caplog.text
+    assert make_describer(Config(vision=VisionConfig(enabled=False))) is None
+
+
+def test_main_refuses_unknown_provider(tmp_path, capsys):
+    import maya_brain.__main__ as entry
+
+    cfg = tmp_path / "m.toml"
+    cfg.write_text('[server]\ntoken = "a-long-enough-secret"\n[llm]\nprovider = "gemini"\n')
+    assert entry.main(["--config", str(cfg)]) == 2
+    assert "provider" in capsys.readouterr().err
