@@ -249,7 +249,7 @@ class BehaviorCommandTest {
     @Test fun command_ignored_while_dragging() {
         val b = mk()
         b.dragStart()
-        b.command("nap", null); assertEquals("surprised", b.animation)
+        b.command("nap", null); assertEquals("held", b.animation)
         b.dragEnd(400f, (H - FOOT).toFloat())
         assertEquals("idle", b.animation)
     }

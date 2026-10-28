@@ -189,7 +189,7 @@ class Behavior(
 
     val animation: String
         get() = when {
-            dragging -> if (connected) "surprised" else "nap"
+            dragging -> if (connected) "held" else "nap"
             mode == Mode.JUMP -> "jump"
             mode == Mode.FALL -> "fall"
             !connected -> "nap"

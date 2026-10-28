@@ -17,6 +17,10 @@ val ANIMATION_FALLBACKS: Map<String, String> = mapOf(
     "perch" to "sit",
     "poke" to "wave",
     "tease" to "happy",
+    "look" to "think",
+    "ask" to "listen",
+    "type" to "poke",
+    "held" to "surprised",
 )
 
 /** One row of the sprite sheet: which row, how many frames, how fast, and whether it loops. */

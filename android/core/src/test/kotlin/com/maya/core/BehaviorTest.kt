@@ -149,7 +149,7 @@ class BehaviorTest {
         b.putFeet(150f, H.toFloat())
         assertTrue(b.jumpTo(p)); b.tick(100)
         b.dragStart()
-        assertEquals("dragged", b.state.doing); assertEquals("surprised", b.animation)
+        assertEquals("dragged", b.state.doing); assertEquals("held", b.animation)
         val x0 = b.x; val y0 = b.y
         b.tick(500); assertEquals(x0, b.x); assertEquals(y0, b.y)
         b.dragEnd(x0, y0)
@@ -339,7 +339,7 @@ class BehaviorTest {
     @Test fun drag_end_falls() {
         val b = mk()
         b.dragStart()
-        assertEquals("surprised", b.animation); assertEquals("dragged", b.state.doing); assertFalse(b.state.grounded)
+        assertEquals("held", b.animation); assertEquals("dragged", b.state.doing); assertFalse(b.state.grounded)
         b.tick(1000); assertEquals("dragged", b.state.doing)
         b.dragEnd(9999f, 500f)
         assertEquals(900f, b.x); assertEquals("fall", b.animation)
@@ -354,12 +354,12 @@ class BehaviorTest {
         val b = mk(speed = 1000f)
         b.putFeet(250f, H.toFloat()); b.dragStart()
         repeat(200) { b.tick(100) }
-        assertEquals(200f, b.x); assertEquals("surprised", b.animation)
+        assertEquals(200f, b.x); assertEquals("held", b.animation)
     }
 
     @Test fun play_is_ignored_while_dragged() {
         val b = mk()
-        b.dragStart(); b.play("wave"); assertEquals("surprised", b.animation)
+        b.dragStart(); b.play("wave"); assertEquals("held", b.animation)
     }
 
     // ---- decisions / temper ----
@@ -585,7 +585,7 @@ class BehaviorTest {
     @Test fun nap_and_drag_outrank_pose() {
         val b = mk()
         b.setPose("listen")
-        b.dragStart(); assertEquals("surprised", b.animation)
+        b.dragStart(); assertEquals("held", b.animation)
         b.dragEnd(10f, (H - FOOT).toFloat()); assertEquals("listen", b.animation)
         b.setConnected(false); assertEquals("nap", b.animation)
         b.setConnected(true); assertEquals("listen", b.animation)

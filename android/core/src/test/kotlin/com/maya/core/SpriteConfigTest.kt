@@ -32,7 +32,10 @@ class SpriteConfigTest {
 
     @Test fun fallback_rows() {
         assertEquals(
-            mapOf("jump" to "surprised", "fall" to "surprised", "perch" to "sit", "poke" to "wave", "tease" to "happy"),
+            mapOf(
+                "jump" to "surprised", "fall" to "surprised", "perch" to "sit", "poke" to "wave", "tease" to "happy",
+                "look" to "think", "ask" to "listen", "type" to "poke", "held" to "surprised",
+            ),
             ANIMATION_FALLBACKS,
         )
         val anim = { row: Int -> """{"row":$row,"frames":4,"fps":4,"loop":true}""" }
@@ -44,5 +47,13 @@ class SpriteConfigTest {
         assertEquals(4, c.spec("poke").row)
         assertEquals(0, c.spec("tease").row) // fallback (happy) missing too: idle
         assertEquals(0, c.spec("moonwalk").row)
+        assertEquals(8, c.spec("held").row) // held -> surprised
+        assertEquals(0, c.spec("look").row) // think missing: idle
+        assertEquals(0, c.spec("type").row) // one level only: poke's own fallback (wave) is not followed
+        val withPoses = parseSpriteConfig("""{"frame_w":64,"frame_h":64,"animations":{"idle":${anim(0)},""" +
+            """"listen":${anim(10)},"think":${anim(11)},"poke":${anim(12)}}}""")
+        assertEquals(11, withPoses.spec("look").row)
+        assertEquals(10, withPoses.spec("ask").row)
+        assertEquals(12, withPoses.spec("type").row)
     }
 }

@@ -19,9 +19,15 @@ import java.time.Instant
  * Polls UsageStatsManager every 5 s for the foreground app and feeds [AppUsageTracker]. Ignores
  * do-not-watch packages and home screens. Maya's own package (settings, the voice activity) is
  * transparent: it keeps the previous app. Without usage access it emits nothing.
- * Polling pauses while the screen is off (see [setScreenOn]).
+ * Polling pauses while the screen is off (see [setScreenOn]). [onForeground] hears every change of
+ * the raw foreground package, do-not-watch apps and home screens included (Maya's own package is
+ * skipped), so MayaService can step away from do-not-watch apps; it never reaches the brain.
  */
-class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sense {
+class AppUsageSense(
+    context: Context,
+    private val doNotWatch: DoNotWatch,
+    private val onForeground: (String) -> Unit = {},
+) : Sense {
     private val ctx: Context = context.applicationContext
     private val pm: PackageManager = ctx.packageManager
     private val usage: UsageStatsManager? = ctx.getSystemService(UsageStatsManager::class.java)
@@ -38,6 +44,8 @@ class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sens
     private var started = false
     private var screenOn = true
     private var foreground: String? = null
+    /** The last package handed to [onForeground]. */
+    private var reportedForeground: String? = null
     private var currentLabel: String = ""
     /** Events before this time (ms) are stale: they happened before the screen last went off. */
     private var ignoreBefore = 0L
@@ -70,6 +78,7 @@ class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sens
         main.removeCallbacks(poll)
         if (!on) {
             foreground = null
+            reportedForeground = null
             ignoreBefore = System.currentTimeMillis()
             deliver(tracker.observe(null, null, Instant.now()))
         } else if (started) {
@@ -92,6 +101,10 @@ class AppUsageSense(context: Context, private val doNotWatch: DoNotWatch) : Sens
         val latest = latestResumed(maxOf(now - WINDOW_MS, ignoreBefore), now)
         if (latest != null) foreground = latest
         val pkg = foreground ?: return
+        if (pkg != ownPackage && pkg != reportedForeground) {
+            reportedForeground = pkg
+            onForeground(pkg)
+        }
         val label = if (pkg == tracker.current() || pkg == ownPackage || isIgnored(pkg)) null else labelOf(pkg)
         deliver(tracker.observe(pkg, label, Instant.now()))
     }

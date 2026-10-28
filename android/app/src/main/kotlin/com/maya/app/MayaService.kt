@@ -19,6 +19,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import com.maya.app.overlay.OverlayBody
@@ -27,6 +28,7 @@ import com.maya.app.senses.DeviceSense
 import com.maya.app.senses.NotificationBridge
 import com.maya.app.senses.ScreenBridge
 import com.maya.app.senses.ScreenSink
+import com.maya.app.senses.realScreenSize
 import com.maya.app.voice.VoicePlayer
 import com.maya.core.Action
 import com.maya.core.AppOpened
@@ -36,12 +38,17 @@ import com.maya.core.Event
 import com.maya.core.Glance
 import com.maya.core.GlanceScheduler
 import com.maya.core.Layout
+import com.maya.core.Look
+import com.maya.core.LookScheduler
 import com.maya.core.NotificationFilter
 import com.maya.core.NotificationInfo
 import com.maya.core.Say
 import com.maya.core.Screen
+import com.maya.core.Sight
+import com.maya.core.SightFailed
 import com.maya.core.UserMessage
 import com.maya.core.UserShush
+import com.maya.core.isPictureHeavy
 
 /** Implemented by the floating overlay (Task 10) and assigned to [MayaService.overlay]. */
 interface OverlayHook {
@@ -93,6 +100,12 @@ class MayaService : Service() {
     private var status = Status.NAPPING
     /** The user hid Maya with the notification's Hide action. */
     private var overlayHidden = false
+    /**
+     * She stepped away because a do-not-watch app (a bank, say) is in front: her window is removed
+     * like Hide and comes back when another app is in front. Not the user's Hide: the notification
+     * still offers Hide, and a Hide meanwhile keeps her hidden afterwards.
+     */
+    private var autoHidden = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     /** Maya is listening to the user (hold to talk). */
     private var listening = false
@@ -114,6 +127,14 @@ class MayaService : Service() {
     private var screenRestricted = false
     /** What we last told [ScreenBridge.active]. */
     private var screenActive = false
+    /** Limits her looks (screenshots); null while the screen sense is off. */
+    private var lookScheduler: LookScheduler? = null
+    /** The screenshot in flight, if any. */
+    private var shot: Shot? = null
+    /** The app and line count of the latest glance taken (for the picture-heavy rule). */
+    private var lastGlancePkg: String? = null
+    private var lastGlanceLines = 0
+    private val shotTimeout = Runnable { shotFailed() }
     private val glanceTick = object : Runnable {
         override fun run() {
             onGlanceTick()
@@ -153,6 +174,7 @@ class MayaService : Service() {
 
     override fun onDestroy() {
         running = false
+        dropShot()
         stopNetworkWatch()
         overlayBody?.destroy()
         overlayBody = null
@@ -233,7 +255,10 @@ class MayaService : Service() {
 
     // ---- overlay ----
 
-    /** Shows Maya's body if we may draw over other apps. Starts napping until the brain connects. */
+    /**
+     * Creates Maya's body if we may draw over other apps, and shows it unless she has stepped away
+     * from a do-not-watch app. Starts napping until the brain connects.
+     */
     private fun startOverlay() {
         if (overlayHidden || overlayBody != null || !Settings.canDrawOverlays(this)) return
         val body = try {
@@ -247,7 +272,7 @@ class MayaService : Service() {
         if (screenLayoutPkg != null) body.setScreenLayout(screenLayout, screenKeyboardTop, screenRestricted, ownLayout())
         overlayBody = body
         overlay = body
-        body.show()
+        if (!autoHidden) body.show()
         updateScreenActive()
     }
 
@@ -255,19 +280,38 @@ class MayaService : Service() {
     private fun toggleHidden() {
         overlayHidden = !overlayHidden
         updateNotification() // the action now reads Show / Hide
-        if (overlayHidden) {
+        applyVisibility()
+    }
+
+    /** Her window is up unless the user hid her or she stepped away from a do-not-watch app. */
+    private fun applyVisibility() {
+        val hidden = overlayHidden || autoHidden
+        if (hidden) {
             heldAudio = null
             voicePlayer?.stop()
         }
         val body = overlayBody ?: return
-        if (overlayHidden) body.hide() else body.show()
+        if (hidden) body.hide() else body.show()
         updateScreenActive()
+    }
+
+    /**
+     * The app in front changed (from the screen sense or the app-usage sense, whichever noticed
+     * last). A do-not-watch app makes her step away; any other app brings her back. Maya's own
+     * windows and the system UI (notification shade) change nothing.
+     */
+    private fun onFrontApp(pkg: String?) {
+        if (!running || pkg == null || pkg == packageName || pkg == SYSTEM_UI) return
+        val away = doNotWatch.isBlocked(pkg)
+        if (away == autoHidden) return
+        autoHidden = away
+        applyVisibility()
     }
 
     // ---- senses ----
 
     private fun startSenses() {
-        val usageSense = AppUsageSense(this, doNotWatch)
+        val usageSense = AppUsageSense(this, doNotWatch, ::onFrontApp)
         appUsage = usageSense
         usageSense.start(::emit)
         val device = DeviceSense(this)
@@ -283,6 +327,7 @@ class MayaService : Service() {
         if (prefs.readScreen) {
             // The accessibility service (Screen access) reports on the main thread.
             glanceScheduler = GlanceScheduler()
+            lookScheduler = LookScheduler()
             val sink = object : ScreenSink {
                 override fun onLayout(pkg: String, layout: Layout, keyboardTop: Int?) = onScreenLayout(pkg, layout, keyboardTop)
 
@@ -312,6 +357,8 @@ class MayaService : Service() {
         screenSink = null
         screenActive = false
         glanceScheduler = null
+        lookScheduler = null
+        dropShot()
         screenPkg = null
     }
 
@@ -320,6 +367,7 @@ class MayaService : Service() {
         if (!running) return
         screenPkg = pkg
         glanceScheduler?.onApp(pkg, SystemClock.elapsedRealtime())
+        onFrontApp(pkg)
     }
 
     /** A new layout of the current app: handed to her body with whether teasing is off for now. */
@@ -341,7 +389,8 @@ class MayaService : Service() {
 
     /**
      * Layouts are only worth building while she is visible: overlay up and not hidden, screen on and
-     * unlocked. Becoming visible again asks the accessibility service for a fresh layout.
+     * unlocked. Becoming visible again asks the accessibility service for a fresh layout. Stepping
+     * away from a do-not-watch app keeps it active, so she hears when another app comes to the front.
      */
     private fun updateScreenActive() {
         if (screenSink == null || ScreenBridge.sink !== screenSink) return
@@ -380,10 +429,123 @@ class MayaService : Service() {
         // user types (keyboard open): it is taken once the keyboard closes.
         val allowed = status == Status.HERE && screenActive && pkg != null && screenLayoutPkg == pkg &&
             screenKeyboardTop == null && !doNotWatch.isBlocked(pkg) && screenUsable()
+        autoLook(now)
         if (!scheduler.poll(now, allowed)) return
         val g = ScreenBridge.service?.glance() ?: return
         if (doNotWatch.isBlocked(g.packageName)) return
+        lastGlancePkg = g.packageName
+        lastGlanceLines = g.lines.size
         if (scheduler.taken(g.packageName, g.lines, now)) emit(Glance(g.packageName, g.app, g.lines, g.targets))
+    }
+
+    // ---- vision ----
+
+    /** A screenshot in flight: the app it is of, and whether the brain asked for it. */
+    private class Shot(val pkg: String, var asked: Boolean)
+
+    /**
+     * The app she may look at (screenshot) right now, or null: connected, Screen access on and the
+     * service up, she is visible (not hidden, not stepped away), the screen on and unlocked, the
+     * current layout is the app's own (not Maya's window, system UI or the lock screen), no
+     * keyboard (no typing, so no password being entered), and the app is not do-not-watch,
+     * Settings, system UI or Maya.
+     */
+    private fun lookablePkg(): String? {
+        val pkg = screenPkg ?: return null
+        if (screenSink == null || ScreenBridge.service == null || status != Status.HERE) return null
+        if (!screenActive || overlayHidden || autoHidden || !screenUsable()) return null
+        if (screenLayoutPkg != pkg || screenKeyboardTop != null) return null
+        if (pkg in NEVER_LOOK || pkg == packageName || doNotWatch.isBlocked(pkg)) return null
+        return pkg
+    }
+
+    /** Every glance tick: a screenshot when the screen is mostly pictures and [LookScheduler] says one is due. */
+    private fun autoLook(now: Long) {
+        val looks = lookScheduler ?: return
+        // Not allowed: nothing is recorded, so the look stays due for when it is.
+        val pkg = lookablePkg() ?: return
+        if (shot != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val (w, h) = realScreenSize(this)
+        // Lines of the latest glance of this app; unknown (no glance of it yet): only the area rule.
+        val lines = if (lastGlancePkg == pkg) lastGlanceLines else Int.MAX_VALUE
+        val heavy = isPictureHeavy(screenLayout.images, w, h, lines)
+        if (looks.autoDue(pkg, heavy, allowed = true, nowMs = now)) takeShot(pkg, asked = false)
+    }
+
+    /** The brain asked her to look now: a screenshot if allowed (one per 20 s), else sight_failed. */
+    private fun onLook() {
+        val looks = lookScheduler
+        val pkg = lookablePkg()
+        if (looks == null || pkg == null) {
+            emit(SightFailed("blocked"))
+            return
+        }
+        if (!looks.askedAllowed(SystemClock.elapsedRealtime())) {
+            emit(SightFailed("blocked"))
+            return
+        }
+        val pending = shot
+        if (pending != null) {
+            pending.asked = true // the look under way answers the question
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            emit(SightFailed("error")) // no screenshots before Android 11
+            return
+        }
+        takeShot(pkg, asked = true)
+    }
+
+    private fun takeShot(pkg: String, asked: Boolean) {
+        val source = ScreenBridge.service
+        if (source == null) {
+            if (asked) emit(SightFailed("error"))
+            return
+        }
+        val s = Shot(pkg, asked)
+        shot = s
+        main.postDelayed(shotTimeout, SHOT_TIMEOUT_MS)
+        source.screenshot { bytes -> onShot(s, bytes) }
+    }
+
+    /**
+     * The screenshot [s] came back ([bytes] null: it failed). Sent as a sight if she may still look
+     * at the same app; the bytes are only ever held here, in memory.
+     */
+    private fun onShot(s: Shot, bytes: ByteArray?) {
+        try {
+            if (shot !== s) return // timed out, or the screen sense stopped meanwhile
+            shot = null
+            main.removeCallbacks(shotTimeout)
+            if (!running) return
+            if (bytes == null) {
+                if (s.asked) emit(SightFailed("error"))
+                return
+            }
+            val source = ScreenBridge.service
+            if (lookablePkg() != s.pkg || source == null) {
+                if (s.asked) emit(SightFailed("blocked"))
+                return
+            }
+            val image = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            emit(Sight(s.pkg, source.appName(s.pkg), if (s.asked) "asked" else "auto", image))
+            overlayBody?.lookedAtScreen()
+        } finally {
+            bytes?.fill(0)
+        }
+    }
+
+    /** No answer from the system in time: an asked look failed. */
+    private fun shotFailed() {
+        val s = shot ?: return
+        shot = null
+        if (running && s.asked) emit(SightFailed("error"))
+    }
+
+    /** Forgets the screenshot in flight (its result, if it still comes, is ignored). */
+    private fun dropShot() {
+        shot = null
+        main.removeCallbacks(shotTimeout)
     }
 
     /** Screen access was turned off while she ran: the last layout is stale, so she keeps only the floor. */
@@ -457,17 +619,18 @@ class MayaService : Service() {
         }
         val clip = heldAudio ?: return
         heldAudio = null
-        if (!overlayHidden) voicePlayer?.play(clip.refId, clip.dataB64)
+        if (!overlayHidden && !autoHidden) voicePlayer?.play(clip.refId, clip.dataB64)
     }
 
     private fun onAction(a: Action) {
         when (a) {
             is Say -> voicePlayer?.onSay(a.id)
             is Audio -> when {
-                overlayHidden -> Unit
+                overlayHidden || autoHidden -> Unit
                 listening -> heldAudio = a // keep only the most recent
                 else -> voicePlayer?.play(a.refId, a.dataB64)
             }
+            is Look -> onLook()
             else -> Unit
         }
         overlay?.handle(a)
@@ -555,6 +718,11 @@ class MayaService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val MAX_MESSAGE_CHARS = 2000
         private const val GLANCE_TICK_MS = 1000L
+        /** An asked look the system has not answered within this long has failed. */
+        private const val SHOT_TIMEOUT_MS = 3000L
+        private const val SYSTEM_UI = "com.android.systemui"
+        /** Never looked at (besides do-not-watch apps and Maya herself). */
+        private val NEVER_LOOK = setOf(SYSTEM_UI, "com.android.settings")
         private const val TAG = "MayaService"
     }
 }

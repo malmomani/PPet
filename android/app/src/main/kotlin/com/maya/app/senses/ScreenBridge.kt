@@ -1,5 +1,9 @@
 package com.maya.app.senses
 
+import android.content.Context
+import android.hardware.display.DisplayManager
+import android.util.DisplayMetrics
+import android.view.Display
 import com.maya.core.Layout
 
 /** Receives what [MayaAccessibilityService] sees. Called on the main thread. */
@@ -23,6 +27,33 @@ interface GlanceSource {
 
     /** Report the current app and layout to the sink soon (a sink was just attached). */
     fun refresh()
+
+    /**
+     * A screenshot of the whole screen as JPEG bytes (long side at most 1024 px, at most
+     * [MAX_SCREENSHOT_BYTES]), or null when it failed or the phone is older than Android 11.
+     * [onResult] is called once, on the main thread. The bytes live only in memory: never written
+     * to disk, never logged. The caller decides whether the screen may be looked at.
+     */
+    fun screenshot(onResult: (ByteArray?) -> Unit)
+
+    /** The app's label for [pkg] (1–100 chars; the package name when it has none). */
+    fun appName(pkg: String): String
+}
+
+/** A screenshot JPEG never exceeds this (base64 ~533 000 chars; the brain drops more than 600 000). */
+const val MAX_SCREENSHOT_BYTES = 400_000
+
+/** The full screen size in px (width, height) of the default display in its current rotation. */
+@Suppress("DEPRECATION")
+internal fun realScreenSize(context: Context): Pair<Int, Int> {
+    val display = context.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+    if (display != null) {
+        val dm = DisplayMetrics()
+        display.getRealMetrics(dm)
+        if (dm.widthPixels > 0 && dm.heightPixels > 0) return Pair(dm.widthPixels, dm.heightPixels)
+    }
+    val dm = context.resources.displayMetrics
+    return Pair(dm.widthPixels, dm.heightPixels)
 }
 
 /** One screen glance: [app] is the label (1–100 chars), [lines] the visible text, [targets] tease tags. */
@@ -43,9 +74,11 @@ object ScreenBridge {
     var service: GlanceSource? = null
 
     /**
-     * Set by MayaService: false while her overlay is not visible (hidden from the notification, not
+     * Set by MayaService: false while her overlay is not up (hidden from the notification, not
      * shown yet) or the screen is off or locked. The accessibility service rebuilds no layouts
-     * then; MayaService calls [GlanceSource.refresh] when it turns true again.
+     * then; MayaService calls [GlanceSource.refresh] when it turns true again. It stays true while
+     * she has stepped away from a do-not-watch app, so the service still reports the app changing
+     * (nothing of a do-not-watch app is ever read).
      */
     @Volatile
     var active: Boolean = false

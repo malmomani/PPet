@@ -2,18 +2,18 @@ package com.maya.app.senses
 
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
+import android.annotation.TargetApi
 import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Resources
+import android.graphics.Bitmap
 import android.graphics.Rect
-import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
-import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
@@ -29,6 +29,7 @@ import com.maya.core.TextNode
 import com.maya.core.UiNode
 import com.maya.core.buildLayout
 import com.maya.core.extractLines
+import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
 /**
@@ -36,12 +37,14 @@ import kotlin.math.roundToInt
  * it never performs gestures or clicks). Reads only the active window's node tree plus the window
  * list (to find the keyboard), and only while MayaService runs with "Let Maya read my screen" on
  * ([ScreenBridge.sink] set):
- * - on events it rebuilds the layout (platforms + tease targets) at most every 500 ms and reports
- *   it, and app changes, to the sink;
- * - it reads the visible text only when MayaService asks for a [glance].
+ * - on events it rebuilds the layout (platforms + tease targets + picture boxes) at most every
+ *   500 ms and reports it, and app changes, to the sink;
+ * - it reads the visible text only when MayaService asks for a [glance];
+ * - it takes a [screenshot] (Android 11+) only when MayaService asks for one; MayaService decides
+ *   whether the screen may be looked at.
  * Never reads password nodes, the content of editable nodes (or anything inside them), do-not-watch
- * apps, Maya herself, system UI or the lock screen. Never logs screen text. Callbacks and every
- * call into it happen on the main thread.
+ * apps, Maya herself, system UI or the lock screen. Never logs screen text or screenshots, never
+ * writes a screenshot to disk. Callbacks and every call into it happen on the main thread.
  */
 class MayaAccessibilityService : AccessibilityService(), GlanceSource {
     private class Seen(val ui: List<UiNode>, val text: List<TextNode>)
@@ -132,6 +135,16 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         }
     }
 
+    override fun screenshot(onResult: (ByteArray?) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            onResult(null)
+            return
+        }
+        Screenshots.take(this, onResult)
+    }
+
+    override fun appName(pkg: String): String = labels.getOrPut(pkg) { clampAppName(labelOf(pkg), pkg) }
+
     private fun detach() {
         main.removeCallbacks(layoutTask)
         layoutPending = false
@@ -210,14 +223,16 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
 
     private fun layoutOf(ui: List<UiNode>, keyboardTop: Int?): Layout {
         val sprite = spriteMetrics()
+        val (screenW, screenH) = realScreenSize(this)
         return buildLayout(
             nodes = ui,
-            screenW = screenWidth(),
+            screenW = screenW,
             spriteW = sprite.width,
             spriteH = sprite.height,
             statusBarH = statusBarHeight(),
             keyboardTop = keyboardTop,
             minImagePx = dp(MIN_IMAGE_DP),
+            screenH = screenH,
         )
     }
 
@@ -323,17 +338,6 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         return fresh
     }
 
-    @Suppress("DEPRECATION")
-    private fun screenWidth(): Int {
-        val display = getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
-        if (display != null) {
-            val dm = DisplayMetrics()
-            display.getRealMetrics(dm)
-            if (dm.widthPixels > 0) return dm.widthPixels
-        }
-        return resources.displayMetrics.widthPixels
-    }
-
     @SuppressLint("DiscouragedApi", "InternalInsetResource")
     private fun statusBarHeight(): Int {
         val id = resources.getIdentifier("status_bar_height", "dimen", "android")
@@ -352,13 +356,10 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
     private fun dp(v: Float): Int = (v * resources.displayMetrics.density).roundToInt()
 
     @Suppress("DEPRECATION")
-    private fun appName(pkg: String): String = labels.getOrPut(pkg) {
-        val label = try {
-            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
-        } catch (e: PackageManager.NameNotFoundException) {
-            null
-        }
-        clampAppName(label, pkg)
+    private fun labelOf(pkg: String): String? = try {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    } catch (e: PackageManager.NameNotFoundException) {
+        null
     }
 
     private companion object {
@@ -368,6 +369,94 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         const val LAYOUT_GAP_MS = 500L
         const val MIN_IMAGE_DP = 48f
         const val STATUS_BAR_FALLBACK_DP = 24f
+    }
+}
+
+/**
+ * Screenshots for [MayaAccessibilityService.screenshot] (Android 11+, `canTakeScreenshot` in the
+ * config). Kept out of the service class so older phones never load the API 30 types. Everything
+ * stays in memory; neither the image nor its bytes are logged.
+ */
+@TargetApi(Build.VERSION_CODES.R)
+private object Screenshots {
+    private const val TAG = "MayaSight"
+    private const val MAX_SIDE_PX = 1024
+    private const val START_QUALITY = 70
+    private const val MIN_QUALITY = 30
+    private const val QUALITY_STEP = 10
+
+    /**
+     * Asks the system for a screenshot of the default display; [onResult] gets the JPEG or null,
+     * once, on the main thread. The system allows about one per second: a refusal (e.g.
+     * ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) is a failure.
+     */
+    fun take(service: AccessibilityService, onResult: (ByteArray?) -> Unit) {
+        val callback = object : AccessibilityService.TakeScreenshotCallback {
+            override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                onResult(encode(screenshot))
+            }
+
+            override fun onFailure(errorCode: Int) {
+                Log.w(TAG, "no screenshot (error $errorCode)")
+                onResult(null)
+            }
+        }
+        try {
+            service.takeScreenshot(Display.DEFAULT_DISPLAY, service.mainExecutor, callback)
+        } catch (e: Exception) {
+            Log.w(TAG, "no screenshot: ${e.javaClass.simpleName}")
+            onResult(null)
+        }
+    }
+
+    /** Hardware buffer -> software bitmap -> scaled -> JPEG of at most [MAX_SCREENSHOT_BYTES]; null on failure. */
+    private fun encode(shot: AccessibilityService.ScreenshotResult): ByteArray? {
+        val buffer = shot.hardwareBuffer
+        var hardware: Bitmap? = null
+        var software: Bitmap? = null
+        var scaled: Bitmap? = null
+        return try {
+            hardware = Bitmap.wrapHardwareBuffer(buffer, shot.colorSpace) ?: return null
+            software = hardware.copy(Bitmap.Config.ARGB_8888, false) ?: return null
+            hardware.recycle()
+            hardware = null
+            buffer.close()
+            scaled = scaleDown(software)
+            compress(scaled)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not encode the screenshot: ${e.javaClass.simpleName}")
+            null
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "could not encode the screenshot: out of memory")
+            null
+        } finally {
+            hardware?.recycle()
+            if (scaled != null && scaled !== software) scaled.recycle()
+            software?.recycle()
+            if (!buffer.isClosed) buffer.close()
+        }
+    }
+
+    /** [src] itself when its long side is at most [MAX_SIDE_PX], else a smaller copy. */
+    private fun scaleDown(src: Bitmap): Bitmap {
+        val long = maxOf(src.width, src.height)
+        if (long <= MAX_SIDE_PX) return src
+        val w = (src.width.toLong() * MAX_SIDE_PX / long).toInt().coerceAtLeast(1)
+        val h = (src.height.toLong() * MAX_SIDE_PX / long).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, w, h, true)
+    }
+
+    /** JPEG at quality 70, lowered by 10 until it fits [MAX_SCREENSHOT_BYTES]; null if even 30 is too big. */
+    private fun compress(bitmap: Bitmap): ByteArray? {
+        val out = ByteArrayOutputStream()
+        var quality = START_QUALITY
+        while (quality >= MIN_QUALITY) {
+            out.reset()
+            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) return null
+            if (out.size() <= MAX_SCREENSHOT_BYTES) return out.toByteArray()
+            quality -= QUALITY_STEP
+        }
+        return null
     }
 }
 

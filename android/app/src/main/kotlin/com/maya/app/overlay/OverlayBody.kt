@@ -135,6 +135,11 @@ class OverlayBody(
     private var listening = false
     private var speaking = false // her voice is playing
     private var thinking = false // the brain is working on a reply
+    private var looking = false // she just sent a screenshot and waits for what she makes of it
+    private val endLook = Runnable {
+        looking = false
+        updatePose()
+    }
     private val holdRunnable = Runnable { onHoldTimer() }
     private val listenCap = Runnable { if (listening) voice.stop() }
     /** The mic is capturing in the current session ([VoiceInput.Listener.onReady] arrived). */
@@ -179,6 +184,7 @@ class OverlayBody(
             // While listening the bubble shows what she hears; replies come after it.
             is Say -> {
                 thinking = false
+                stopLooking()
                 updatePose()
                 if (bubbleHeld()) {
                     deferredSay = a
@@ -189,6 +195,7 @@ class OverlayBody(
             }
             is Typing -> {
                 thinking = a.on
+                if (!a.on) stopLooking()
                 updatePose()
                 if (bubbleHeld()) deferredTyping = a.on else if (visible) bubble.typing(a.on)
             }
@@ -233,12 +240,30 @@ class OverlayBody(
         behavior.setLayout(layout, quiet)
     }
 
-    /** Sustained pose from what's going on: listening beats talking beats thinking. */
+    /**
+     * She just sent a screenshot to the brain: she holds the `look` pose (think's row until the art
+     * has one) until her next line, the typing dots going away, or [LOOK_POSE_MS].
+     */
+    fun lookedAtScreen() {
+        if (!connected) return
+        looking = true
+        main.removeCallbacks(endLook)
+        main.postDelayed(endLook, LOOK_POSE_MS)
+        updatePose()
+    }
+
+    private fun stopLooking() {
+        looking = false
+        main.removeCallbacks(endLook)
+    }
+
+    /** Sustained pose from what's going on: listening beats talking beats looking beats thinking. */
     private fun updatePose() {
         behavior.setPose(
             when {
                 listening -> "listen"
                 speaking -> "talk"
+                looking && connected -> "look"
                 thinking && connected -> "think"
                 else -> null
             },
@@ -251,6 +276,7 @@ class OverlayBody(
         if (on) reporter.reset() // the brain hears where she is right away
         if (!on) {
             thinking = false
+            stopLooking()
             updatePose()
             deferredTyping = null
             bubble.typing(false) // a dropped link would otherwise leave "…" up forever
@@ -298,6 +324,7 @@ class OverlayBody(
 
     fun destroy() {
         hide()
+        stopLooking()
         main.removeCallbacks(releaseBubble)
         deferredSay = null
         deferredTyping = null
@@ -753,6 +780,8 @@ class OverlayBody(
         const val BODY_THROTTLE_MS = 5000L
         const val BOTTOM_MARGIN_DP = 48f
         const val THROW_MS = 350L
+        /** After she sent a screenshot she holds the `look` pose until her answer comes, at most this long. */
+        const val LOOK_POSE_MS = 15_000L
         const val THROW_SECONDS = 0.25f
         const val UNREACHABLE_BUBBLE_MS = 3000L
         const val TOGGLE_WINDOW_MS = 500L

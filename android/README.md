@@ -124,6 +124,33 @@ Maya can read what's on the screen of the app you're using: its visible text (so
 
 **Privacy.** Only the visible text of the app you're in (at most 40 short lines) and a short list of button kinds (send, like, play, search, share, comment, follow) go to your PC, and only now and then: soon after you switch apps, then at most every 3 minutes if the text changed. She never reads passwords or what you type, and never looks at the lock screen, the notification shade, her own settings, or apps in the **Never watch these apps** list (and anything with "bank" in its package name). On your PC she keeps one headline per glance in her memory; the full text is never saved, only held as "the latest screen" until the next glance. She only looks while she is on screen (not while hidden from the notification). To stop it, switch off **Let Maya read my screen** or turn Maya off in **Accessibility**.
 
+## 10. Maya looks at pictures
+
+With **Screen access** on and **Let Maya read my screen** on, Maya can also *look* at the screen: she takes a screenshot and your PC describes it in a sentence or two, so she can talk about the photo, video or meme you're looking at, not just the text around it. This needs **Android 11 or newer** (the S23 Ultra has it); on older phones she only reads the text.
+
+**When she looks.**
+- **On her own**, when the screen is mostly pictures (a gallery, a photo feed, a video): at most once every 5 minutes, and at most once every 10 minutes in the same app.
+- **When you ask**, for example "look at this" (typed or spoken): she looks within a second, at most once every 20 seconds. If she isn't allowed to look right then, she tells you she couldn't see it.
+- While she waits for what she makes of it, she holds a "looking" pose.
+
+She never looks while she is hidden (from the notification), while the keyboard is open (so never while you type a password), on the lock screen or the notification shade, at Android's Settings or her own settings, or in apps in the **Never watch these apps** list (and anything with "bank" in its package name).
+
+**Privacy.** The screenshot is shrunk (at most 1024 pixels on its long side) and only ever held in memory: it is never saved on the phone or the PC and never written to a log. It goes to your PC once, the PC's vision model describes it, and the picture is thrown away. Only a short description (at most 160 characters) stays in Maya's memory. If your PC brain uses an online AI service instead of a local one, the screenshot goes to that service; see the brain guide. Maya herself is in the screenshot (she's on top of the app); the PC is told to ignore her. To stop it, switch off **Let Maya read my screen** or turn Maya off in **Accessibility**.
+
+## 11. Banking apps
+
+Some banking apps refuse to open, or close themselves, while Maya is running. That's the bank being careful, not Maya doing anything: banks block apps that were **installed from an APK (not the Play Store) and have Accessibility switched on**, because phone-banking malware uses exactly that to read the screen and press buttons, and they also watch for **windows drawn over their app** (another malware trick). Maya has both.
+
+**She steps away in do-not-watch apps.** While an app from the **Never watch these apps** list (or anything with "bank" in its package name) is in front, Maya takes her window off the screen completely, as if you had tapped **Hide**, and comes back when you switch to another app. If you tap **Hide** in the notification meanwhile, she stays hidden until you tap **Show**. She never reads, looks at or does anything in those apps. If your bank's package name doesn't contain "bank", add it to the list (in the app, under **Never watch these apps**, one package per line; the package name is the `id=` part of the app's Play Store link).
+
+**If the bank still refuses** (it sees that Accessibility is on, even though Maya ignores it), set up the volume-key shortcut to switch Maya's **Screen access** off and on in a second:
+
+1. Open **Settings** → **Accessibility** → **Advanced settings** → **Volume up and down buttons**.
+2. Switch it on and pick **Maya**.
+3. Before opening the bank, press and hold **both volume keys** for 3 seconds: Screen access turns off (Android tells you). Do the same after banking to turn it back on.
+
+While Screen access is off, Maya only walks along the bottom of the screen and doesn't read or look at anything.
+
 ## Troubleshooting
 
 | What you see | What to do |
@@ -133,7 +160,8 @@ Maya can read what's on the screen of the app you're using: its visible text (so
 | Maya doesn't comment on apps | **Usage access** is missing. In the app, tap **Grant** next to it and switch it on for Maya. |
 | Maya never mentions messages | Check **Notification access** has a tick (✓) and **Let Maya see who messages me** is on. If the switch for Maya in Android's notification access list is greyed out, allow restricted settings (section 8). |
 | Maya never talks about what's on screen, or only walks along the bottom | Check **Screen access** has a tick (✓) and **Let Maya read my screen** is on. If the switch for Maya in Android's accessibility list is greyed out, allow restricted settings (section 9). After the app is updated, Android sometimes turns screen access off: switch it on again. |
-| Maya isn't visible | **Draw over other apps** isn't granted, or **Hide** was tapped in the notification. Tap **Hide** again to bring her back, or open the app and check the permissions list. |
+| Maya isn't visible | **Draw over other apps** isn't granted, or **Hide** was tapped in the notification. Tap **Hide** again to bring her back, or open the app and check the permissions list. In a banking app (or another app in **Never watch these apps**) she steps away on purpose and comes back when you leave it (section 11). |
+| A banking app won't open or closes itself | See section 11: use the volume-key shortcut to switch Screen access off while banking. |
 | Maya disappears after a while | Samsung put her to sleep. Redo the battery steps in section 6. |
 | Nothing works after the PC restarts | Start the brain again (step 3). |
 | Holding Maya shows "…" but never "🎤 …" | Keep holding: the 🎤 and a short buzz mean she is listening, so start talking then. If it never appears, see the next rows. |
@@ -151,6 +179,6 @@ Maya's pictures live in `android/app/src/main/assets/sprites/`:
 - `maya.png`: one sheet with one row per animation.
 - `sprites.json`: describes the sheet: `frameWidth`/`frameHeight` (or `frame_w`/`frame_h`), and for each animation its `row`, number of `frames`, `fps` and whether it `loop`s.
 
-The current art is the 64×64 Maya pack (12 animations); its sources, PSD, palette and preview live in `art/maya/`. To use new art, replace those two files keeping the animation names: idle, walk, sit, nap, wave, peek, happy, sulk, surprised, plus talk (while her voice plays), listen (while you hold her to talk) and think (while she works on a reply). She's drawn at a whole-number scale about 64 dp tall.
+The current art is the 64×64 Maya pack (12 animations); its sources, PSD, palette and preview live in `art/maya/`. To use new art, replace those two files keeping the animation names: idle, walk, sit, nap, wave, peek, happy, sulk, surprised, plus talk (while her voice plays), listen (while you hold her to talk) and think (while she works on a reply). Optional rows the app uses when present (otherwise it shows the row in brackets): jump and fall (surprised), perch (sit), poke (wave), tease (happy), look (think; after she took a screenshot), ask (listen), type (poke) and held (surprised; while you drag her). She's drawn at a whole-number scale about 64 dp tall.
 
 Then commit and push (the phone only gets new art from a new APK). The **android** workflow builds one; download and install it as in steps 1 and 2. It installs over the old one and keeps your settings.

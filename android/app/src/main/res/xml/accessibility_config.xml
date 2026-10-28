@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Maya's eyes: reads the active window and the window list. No canPerformGestures: she never
-     presses anything. -->
+<!-- Maya's eyes: reads the active window and the window list, and (Android 11+) takes a screenshot
+     now and then to see pictures (kept in memory only). No canPerformGestures: she never presses
+     anything. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_description"
     android:notificationTimeout="300"
     android:settingsActivity="com.maya.app.SettingsActivity" />
