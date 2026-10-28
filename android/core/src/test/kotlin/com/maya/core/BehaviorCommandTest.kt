@@ -552,4 +552,81 @@ class BehaviorCommandTest {
             }
         }
     }
+
+    // ---- press ----
+
+    @Test fun press_command_reports_done_and_lost() {
+        val btn = Box(400, 1500, 600, 1560) // any labelled box: not a tease target
+        val b = mk(speed = 200f)
+        b.setLayout(layout(Platform(400, 600, 1500)))
+        b.putFeet(300f, H.toFloat())
+        assertFalse(b.pressDone()); assertFalse(b.pressTargetLost())
+        b.commandPress(btn)
+        assertFalse(b.pressDone())
+        b.settle()
+        // she is on it and poking; the first ask says so, then it is consumed
+        assertEquals("poke", b.animation); assertEquals("tease", b.state.doing)
+        assertEquals(500f, b.state.feetX); assertEquals(1500f, b.state.feetY)
+        assertNull(b.state.target) // not a tease tag: the brain is told nothing
+        assertTrue(b.pressDone()); assertFalse(b.pressDone())
+        assertFalse(b.pressTargetLost())
+        b.runFor(2510)
+        b.settle()
+        assertFalse(b.pressDone()); assertFalse(b.pressTargetLost())
+        assertTrue(b.drainMoments().isEmpty())
+    }
+
+    @Test fun press_a_small_box_with_no_platform() {
+        val b = mk(speed = 200f)
+        b.putFeet(300f, H.toFloat())
+        b.commandPress(Box(480, 1500, 520, 1540))
+        b.settle()
+        assertEquals("poke", b.animation); assertEquals(1500f, b.state.feetY); assertEquals(500f, b.state.feetX)
+        assertTrue(b.pressDone())
+    }
+
+    @Test fun press_lost_after_6s_and_when_restricted() {
+        // cannot get under it in time: 6 s like a tease
+        val far = Box(100, 900, 200, 960)
+        val b = mk(speed = 100f)
+        b.setLayout(layout(Platform(100, 200, 900)))
+        b.commandPress(far)
+        assertEquals("walk", b.animation)
+        b.runFor(5990); assertFalse(b.pressTargetLost()); assertFalse(b.pressDone())
+        b.runFor(20)
+        assertTrue(b.pressTargetLost()); assertFalse(b.pressTargetLost()) // once
+        assertFalse(b.pressDone())
+
+        val r = mk()
+        r.setRestricted(true)
+        r.commandPress(Box(400, 1500, 600, 1560))
+        assertTrue(r.pressTargetLost()); assertFalse(r.pressDone())
+        assertFalse(r.pressTargetLost())
+
+        // a box below the floor is not reachable either
+        val c = mk()
+        c.commandPress(Box(400, H + 10, 600, H + 60))
+        assertTrue(c.pressTargetLost())
+    }
+
+    @Test fun press_waits_for_a_landing_and_a_new_command_clears_it() {
+        val btn = Box(400, 1500, 600, 1560)
+        val b = mk(speed = 200f)
+        b.setLayout(layout(Platform(400, 600, 1500), Platform(100, 300, 1000)))
+        b.putFeet(200f, 600f) // let go in mid-air
+        assertEquals("fall", b.state.doing)
+        b.commandPress(btn) // in the air: runs on landing
+        var done = false
+        repeat(1500) { if (!done) { b.tick(10); done = b.pressDone() } }
+        assertTrue("never poked", done)
+        assertEquals("poke", b.animation); assertEquals(1500f, b.state.feetY)
+
+        val c = mk(speed = 200f)
+        c.setLayout(layout(Platform(400, 600, 1500)))
+        c.putFeet(300f, H.toFloat())
+        c.commandPress(btn)
+        c.command("stay", null) // replaced: no longer pressing
+        c.runFor(8000)
+        assertFalse(c.pressDone()); assertFalse(c.pressTargetLost())
+    }
 }

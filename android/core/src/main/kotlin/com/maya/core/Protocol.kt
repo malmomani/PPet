@@ -6,6 +6,7 @@ import java.util.UUID
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -149,6 +150,18 @@ data class SightFailed(
     override val ts: Instant = Instant.now(),
 ) : Event
 
+/**
+ * How an [Act] ended: [status] is `done|declined|timeout|failed|blocked`; [detail] says why when it helps.
+ * [actId] is the id of the act. Never queued offline (a result arriving after reconnect is stale).
+ */
+data class ActResult(
+    val actId: String,
+    val status: String,
+    val detail: String? = null,
+    override val id: String = newId(),
+    override val ts: Instant = Instant.now(),
+) : Event
+
 data class OfflineSummary(
     val events: List<Event>,
     val since: Instant,
@@ -178,6 +191,29 @@ data class Move(val intent: String, val target: String? = null) : Action
 
 /** The brain asks her to look at the screen now; [id] is the brain message id, "" when absent. */
 data class Look(val id: String = "") : Action
+
+/**
+ * The brain asks her to do something on the phone. [kind] is one of [ACT_KINDS]; only the fields of
+ * that kind are set (spec §5.1). [id] is the brain message id, answered by [ActResult.actId]; "" when absent.
+ */
+data class Act(
+    val kind: String,
+    val app: String? = null,
+    val key: String? = null,
+    val seconds: Int? = null,
+    val label: String? = null,
+    val hour: Int? = null,
+    val minute: Int? = null,
+    val dir: String? = null,
+    val query: String? = null,
+    val target: String? = null,
+    val text: String? = null,
+    val into: String? = null,
+    val id: String = "",
+) : Action
+
+val ACT_KINDS: List<String> =
+    listOf("open_app", "media", "timer", "alarm", "volume", "web_search", "scroll", "press", "type")
 
 /** Moves the brain can ask for (same as the brain). [TEASE_INTENTS] need a target. */
 val MOVE_INTENTS: List<String> = listOf(
@@ -251,6 +287,11 @@ object Protocol {
                 put("image_b64", e.imageB64)
             }
             is SightFailed -> put("reason", e.reason)
+            is ActResult -> {
+                put("act_id", e.actId)
+                put("status", e.status)
+                if (e.detail != null) put("detail", e.detail)
+            }
             is OfflineSummary -> {
                 put("events", JsonArray(e.events.map { encodeObject(it) }))
                 put("since", fmt(e.since))
@@ -274,6 +315,7 @@ object Protocol {
         is BodyMoment -> "body_moment"
         is Sight -> "sight"
         is SightFailed -> "sight_failed"
+        is ActResult -> "act_result"
         is OfflineSummary -> "offline_summary"
     }
 
@@ -314,9 +356,59 @@ object Protocol {
                 Move(intent, target)
             }
             "look" -> Look(o.str("id") ?: "")
+            "act" -> decodeAct(o)
             else -> null
         }
     }
+
+    /** One [Act] per kind, with the brain's limits; anything else is null. */
+    private fun decodeAct(o: JsonObject): Act? {
+        val id = o.str("id") ?: ""
+        return when (val kind = o.str("kind")) {
+            "open_app" -> Act(kind, app = o.text("app", 1, 100) ?: return null, id = id)
+            "media" -> Act(kind, key = o.str("key")?.takeIf { it in MEDIA_KEYS } ?: return null, id = id)
+            "timer" -> {
+                if (o.badOptional("label", 60)) return null
+                Act(kind, seconds = o.int("seconds", 5, 86_400) ?: return null, label = o.str("label"), id = id)
+            }
+            "alarm" -> {
+                if (o.badOptional("label", 60)) return null
+                Act(
+                    kind,
+                    hour = o.int("hour", 0, 23) ?: return null,
+                    minute = o.int("minute", 0, 59) ?: return null,
+                    label = o.str("label"),
+                    id = id,
+                )
+            }
+            "volume" -> Act(kind, dir = o.str("dir")?.takeIf { it in VOLUME_DIRS } ?: return null, id = id)
+            "web_search" -> Act(kind, query = o.text("query", 1, 200) ?: return null, id = id)
+            "scroll" -> Act(kind, dir = o.str("dir")?.takeIf { it in SCROLL_DIRS } ?: return null, id = id)
+            "press" -> Act(kind, target = o.text("target", 1, 40) ?: return null, id = id)
+            "type" -> {
+                if (o.badOptional("into", 40)) return null
+                Act(kind, text = o.text("text", 1, 500) ?: return null, into = o.str("into"), id = id)
+            }
+            else -> null
+        }
+    }
+
+    private val MEDIA_KEYS = setOf("play_pause", "next", "previous")
+    private val VOLUME_DIRS = setOf("up", "down", "mute")
+    private val SCROLL_DIRS = setOf("up", "down")
+
+    /** A string field of [min]..[max] chars, else null. */
+    private fun JsonObject.text(key: String, min: Int, max: Int): String? = str(key)?.takeIf { it.length in min..max }
+
+    /** An optional string field that is present (not null) but not a string of at most [max] chars. */
+    private fun JsonObject.badOptional(key: String, max: Int): Boolean {
+        val e = this[key]
+        if (e == null || e is JsonNull) return false
+        return (str(key)?.length ?: Int.MAX_VALUE) > max
+    }
+
+    private fun JsonObject.int(key: String, min: Int, max: Int): Int? =
+        long(key)?.takeIf { it in min..max }?.toInt()
 
     private fun JsonElement?.prim(): JsonPrimitive? = this as? JsonPrimitive
 

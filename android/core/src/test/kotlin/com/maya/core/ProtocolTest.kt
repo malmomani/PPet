@@ -235,6 +235,68 @@ class ProtocolTest {
         assertEquals(Look("7"), Protocol.decodeAction("""{"type":"look","id":"7","ts":"2026-10-28T09:00:00Z"}"""))
     }
 
+    @Test fun decode_act_kinds() {
+        fun d(body: String) = Protocol.decodeAction("""{"type":"act","id":"a1","ts":"2026-10-28T09:00:00Z",$body}""")
+        assertEquals(Act("open_app", app = "YouTube", id = "a1"), d(""""kind":"open_app","app":"YouTube""""))
+        assertEquals(Act("media", key = "next", id = "a1"), d(""""kind":"media","key":"next""""))
+        assertEquals(Act("media", key = "play_pause", id = "a1"), d(""""kind":"media","key":"play_pause""""))
+        assertEquals(Act("timer", seconds = 300, id = "a1"), d(""""kind":"timer","seconds":300"""))
+        assertEquals(Act("timer", seconds = 5, label = "tea", id = "a1"), d(""""kind":"timer","seconds":5,"label":"tea""""))
+        assertEquals(Act("timer", seconds = 86400, label = null, id = "a1"), d(""""kind":"timer","seconds":86400,"label":null"""))
+        assertEquals(Act("alarm", hour = 7, minute = 30, id = "a1"), d(""""kind":"alarm","hour":7,"minute":30"""))
+        assertEquals(Act("alarm", hour = 23, minute = 59, label = "gym", id = "a1"), d(""""kind":"alarm","hour":23,"minute":59,"label":"gym""""))
+        assertEquals(Act("volume", dir = "mute", id = "a1"), d(""""kind":"volume","dir":"mute""""))
+        assertEquals(Act("web_search", query = "cats", id = "a1"), d(""""kind":"web_search","query":"cats""""))
+        assertEquals(Act("scroll", dir = "down", id = "a1"), d(""""kind":"scroll","dir":"down""""))
+        assertEquals(Act("press", target = "send", id = "a1"), d(""""kind":"press","target":"send""""))
+        assertEquals(Act("type", text = "hi", id = "a1"), d(""""kind":"type","text":"hi""""))
+        assertEquals(Act("type", text = "hi", into = "message", id = "a1"), d(""""kind":"type","text":"hi","into":"message""""))
+        assertEquals(Act("scroll", dir = "up", id = ""), Protocol.decodeAction("""{"type":"act","kind":"scroll","dir":"up"}"""))
+        // other fields of another kind are ignored
+        assertEquals(Act("scroll", dir = "up", id = "a1"), d(""""kind":"scroll","dir":"up","query":"x","seconds":9"""))
+    }
+
+    @Test fun decode_act_invalid_is_null() {
+        fun d(body: String) = Protocol.decodeAction("""{"type":"act","id":"a1",$body}""")
+        val long = "x".repeat(201)
+        for (bad in listOf(
+            """"kind":"fly"""", """"app":"X"""", """"kind":5,"app":"X"""",
+            """"kind":"open_app"""", """"kind":"open_app","app":""""", """"kind":"open_app","app":"${"x".repeat(101)}"""", """"kind":"open_app","app":7""",
+            """"kind":"media"""", """"kind":"media","key":"stop"""", """"kind":"media","key":3""",
+            """"kind":"timer"""", """"kind":"timer","seconds":4""", """"kind":"timer","seconds":86401""", """"kind":"timer","seconds":"60"""",
+            """"kind":"timer","seconds":60.5""", """"kind":"timer","seconds":60,"label":"${"x".repeat(61)}"""", """"kind":"timer","seconds":60,"label":3""",
+            """"kind":"alarm","hour":7""", """"kind":"alarm","minute":7""", """"kind":"alarm","hour":24,"minute":0""", """"kind":"alarm","hour":-1,"minute":0""",
+            """"kind":"alarm","hour":7,"minute":60""", """"kind":"alarm","hour":7,"minute":0,"label":"${"x".repeat(61)}"""",
+            """"kind":"volume","dir":"sideways"""", """"kind":"volume"""",
+            """"kind":"web_search","query":""""", """"kind":"web_search","query":"$long"""", """"kind":"web_search"""",
+            """"kind":"scroll","dir":"left"""", """"kind":"scroll"""",
+            """"kind":"press","target":""""", """"kind":"press","target":"${"x".repeat(41)}"""", """"kind":"press"""",
+            """"kind":"type","text":""""", """"kind":"type","text":"${"x".repeat(501)}"""", """"kind":"type"""",
+            """"kind":"type","text":"hi","into":"${"x".repeat(41)}"""",
+        )) assertNull("should be rejected: $bad", d(bad))
+        assertNull(Protocol.decodeAction("""{"type":"act"}"""))
+        // boundaries accepted
+        assertEquals(Act("open_app", app = "x".repeat(100), id = "a1"), d(""""kind":"open_app","app":"${"x".repeat(100)}""""))
+        assertEquals(Act("web_search", query = "x".repeat(200), id = "a1"), d(""""kind":"web_search","query":"${"x".repeat(200)}""""))
+        assertEquals(Act("press", target = "x".repeat(40), id = "a1"), d(""""kind":"press","target":"${"x".repeat(40)}""""))
+        assertEquals(Act("type", text = "x".repeat(500), into = "y".repeat(40), id = "a1"), d(""""kind":"type","text":"${"x".repeat(500)}","into":"${"y".repeat(40)}""""))
+    }
+
+    @Test fun encode_act_result() {
+        val ts = Instant.parse("2026-10-28T09:00:00Z")
+        val o = Json.parseToJsonElement(Protocol.encode(ActResult("a1", "failed", "not on screen", id = "r1", ts = ts))).jsonObject
+        assertEquals(setOf("type", "id", "ts", "act_id", "status", "detail"), o.keys)
+        assertEquals("act_result", o["type"]!!.jsonPrimitive.content)
+        assertEquals("r1", o["id"]!!.jsonPrimitive.content)
+        assertEquals("2026-10-28T09:00:00Z", o["ts"]!!.jsonPrimitive.content)
+        assertEquals("a1", o["act_id"]!!.jsonPrimitive.content)
+        assertEquals("failed", o["status"]!!.jsonPrimitive.content)
+        assertEquals("not on screen", o["detail"]!!.jsonPrimitive.content)
+        // detail is optional: left out when absent
+        val d = Json.parseToJsonElement(Protocol.encode(ActResult("a2", "done", id = "r2", ts = ts))).jsonObject
+        assertEquals(setOf("type", "id", "ts", "act_id", "status"), d.keys)
+    }
+
     @Test fun unknown_action_ignored() {
         assertNull(Protocol.decodeAction("""{"type":"move","intent":"fly"}"""))
         assertNull(Protocol.decodeAction("""{"type":"move","intent":"fly","target":"send"}"""))

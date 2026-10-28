@@ -38,6 +38,9 @@ const val POKE_MS = 2500
 const val SHOO_SULK_MS = 1500
 /** A tease she cannot reach within this long is given up (she plays `happy`). */
 const val TEASE_REACH_MS = 6000
+/** The tease "tag" of a press: any labelled box, never a real tease tag. */
+private const val PRESS = "press"
+
 /** Any other move she has not finished within this long is given up (she roams on her own again). */
 const val MOVE_MAX_MS = 15_000
 
@@ -110,13 +113,15 @@ class Behavior(
 
     /** Something asked for while she could not do it yet (in the air, or hopping off a target). */
     private sealed interface Deferred
-    private data class DeferredCmd(val intent: String, val tag: String?) : Deferred
+    private data class DeferredCmd(val intent: String, val tag: String?, val press: Box? = null) : Deferred
     private data class DeferredPlay(val name: String, val ms: Long) : Deferred
 
     private enum class Phase { APPROACH, SIT, POKE, SULK }
 
     /** A tease: [target] (followed as the layout changes) and the edge she stands on to reach it. */
     private class Tease(val kind: String, val tag: String, var target: Target, var surface: Platform) {
+        /** A press targets any box on screen (found by its label), not a tease tag: it is not followed through layouts. */
+        val press: Boolean get() = kind == PRESS
         var phase = Phase.APPROACH
         var onTargetMs = 0L
     }
@@ -157,6 +162,8 @@ class Behavior(
 
     private var goal: Goal? = null
     private var tease: Tease? = null
+    private var pressStarted = false
+    private var pressLost = false
     /** At most one command and one play, in the order they arrived; run on landing (a command also when a one-shot ends). */
     private val deferred = ArrayList<Deferred>()
     private val moments = ArrayList<Moment>()
@@ -254,7 +261,7 @@ class Behavior(
                     platform != null -> "platform"
                     else -> "floor"
                 },
-                target = if (onTarget) tease?.tag else null,
+                target = if (onTarget && tease?.press != true) tease?.tag else null,
                 gesture = gesture,
                 lookX = lookX,
                 lookY = lookY,
@@ -325,16 +332,32 @@ class Behavior(
      * one-shot gesture once the gesture ends (the latest one wins); on a tease target she hops off first. `sit_on`/`poke` with no such target in the
      * layout (or while restricted) play `happy` instead.
      */
-    fun command(intent: String, tag: String?) {
-        if (dragging || !connected || intent !in MOVE_INTENTS) return
-        if (airborne || mode == Mode.ONE_SHOT) return defer(DeferredCmd(intent, tag))
+    fun command(intent: String, tag: String?) = startCommand(intent, tag, null)
+
+    /**
+     * `press`: like a `poke` on [target], any box on screen (a button found by its label). She walks
+     * to it, lands on or beside it and plays `poke`; [pressDone] says when the poke starts and
+     * [pressTargetLost] when she gave up (6 s, as a tease), the box is out of reach, or she is
+     * restricted (or dragged or offline). Waits for a landing or a gesture like any move.
+     */
+    fun commandPress(target: Box) = startCommand("poke", null, target)
+
+    private fun startCommand(intent: String, tag: String?, press: Box?) {
+        pressStarted = false
+        pressLost = false
+        if (dragging || !connected || intent !in MOVE_INTENTS) {
+            if (press != null) pressLost = true
+            return
+        }
+        if (airborne || mode == Mode.ONE_SHOT) return defer(DeferredCmd(intent, tag, press))
         if (mode == Mode.TEASE) {
             hopOff()
-            return defer(DeferredCmd(intent, tag))
+            return defer(DeferredCmd(intent, tag, press))
         }
         endTease()
         goal = null
-        if (airborne) return defer(DeferredCmd(intent, tag)) // she stood on the tease's own edge
+        if (airborne) return defer(DeferredCmd(intent, tag, press)) // she stood on the tease's own edge
+        if (press != null) return startPress(press)
         when (intent) {
             "stay" -> { goIdle(); remainingMs = STAY_MS.toLong() }
             "wander" -> decide()
@@ -362,7 +385,8 @@ class Behavior(
             return false
         }
         if (tz.phase == Phase.SULK) return true
-        moments.add(Moment("shooed", tz.tag))
+        loseUnfinishedPress(tz)
+        moments.add(Moment("shooed", if (tz.press) null else tz.tag))
         if (mode == Mode.TEASE) {
             tz.phase = Phase.SULK
             // the 8 s cap holds: the sulk only uses what is left of it
@@ -406,6 +430,7 @@ class Behavior(
 
     fun dragStart() {
         dragging = true
+        tease?.let { loseUnfinishedPress(it) }
         tease = null
         goal = null
         deferred.clear()
@@ -572,6 +597,7 @@ class Behavior(
     /** The move cannot be finished; a tease plays `happy` instead. */
     private fun giveUp() {
         val teasing = tease != null
+        if (tease?.press == true) pressLost = true
         endTease()
         goal = null
         if (!airborne) goIdle()
@@ -623,11 +649,34 @@ class Behavior(
         startGoal(Goal(tz.surface, targetX(tz), Arrive.TEASE))
     }
 
+    /** A poke on [box]; out of reach (restricted, or not above the floor) it is lost at once, without a `happy`. */
+    private fun startPress(box: Box) {
+        if (restricted || box.top >= floorY || box.width <= 0 || box.height <= 0) {
+            pressLost = true
+            return
+        }
+        val t = Target(PRESS, box)
+        val tz = Tease(PRESS, PRESS, t, surfaceFor(t))
+        tease = tz
+        startGoal(Goal(tz.surface, targetX(tz), Arrive.TEASE))
+    }
+
+    /** A press cut short before her poke started (shooed, dragged away) is lost. */
+    private fun loseUnfinishedPress(tz: Tease) {
+        if (tz.press && mode != Mode.TEASE) pressLost = true
+    }
+
+    /** True once, right after her poke on the [commandPress] box starts. */
+    fun pressDone(): Boolean = pressStarted.also { pressStarted = false }
+
+    /** True once, if she could not reach the [commandPress] box. */
+    fun pressTargetLost(): Boolean = pressLost.also { pressLost = false }
+
     /** The platform the target's top edge belongs to, or one made from its top edge (too small to be a platform). */
     private fun surfaceFor(t: Target): Platform {
         val b = t.bounds
         return platforms
-            .filter { it.top < floorY && it.tag == t.tag && it.left <= b.right && b.left <= it.right && abs(it.top - b.top) <= FOLLOW_TOLERANCE_PX }
+            .filter { it.top < floorY && (it.tag == t.tag || t.tag == PRESS) && it.left <= b.right && b.left <= it.right && abs(it.top - b.top) <= FOLLOW_TOLERANCE_PX }
             .minByOrNull { abs(it.top - b.top) }
             ?: Platform(max(b.left, 0), min(b.right, screenW), b.top, t.tag)
     }
@@ -642,6 +691,7 @@ class Behavior(
     /** The same target in the current layout (same tag, overlapping, within 8 px in y), or null. */
     private fun followTarget(t: Target): Target? {
         if (restricted) return null
+        if (t.tag == PRESS) return t.takeIf { it.bounds.top < floorY }
         val b = t.bounds
         return targets
             .filter {
@@ -663,6 +713,7 @@ class Behavior(
         } else {
             tz.phase = Phase.POKE
             remainingMs = POKE_MS.toLong()
+            if (tz.press) pressStarted = true
         }
         placeOnTarget(tz)
     }
@@ -926,7 +977,7 @@ class Behavior(
         if (queued.none { it is DeferredCmd } && goal != null) plan()
         for (d in queued) {
             when (d) {
-                is DeferredCmd -> command(d.intent, d.tag)
+                is DeferredCmd -> startCommand(d.intent, d.tag, d.press)
                 is DeferredPlay -> playFor(d.name, d.ms)
             }
         }
@@ -1014,7 +1065,7 @@ class Behavior(
             if (mode != Mode.TEASE) return giveUp() // gone before she got there
             tease = null
             goal = null
-            if (byLayout) markFell(tz.tag)
+            if (byLayout) markFell(if (tz.press) null else tz.tag)
             startFall(0f)
             return
         }

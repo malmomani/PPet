@@ -57,7 +57,7 @@ private val MARKS = Regex("\\p{M}+")
  * Lower-cased words: runs of letters/digits (Unicode-aware, so Arabic works). Combining marks
  * (Arabic diacritics) are stripped first, so "إِرْسَال" is the word "إرسال".
  */
-private fun words(s: String?): List<String> =
+internal fun words(s: String?): List<String> =
     if (s == null) emptyList() else s.lowercase().replace(MARKS, "").split(NON_WORD).filter { it.isNotEmpty() }
 
 private const val MAX_LABEL_WORDS = 4

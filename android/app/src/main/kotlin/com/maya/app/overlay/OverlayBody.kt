@@ -24,6 +24,7 @@ import android.view.animation.DecelerateInterpolator
 import com.maya.app.OverlayHook
 import com.maya.app.R
 import com.maya.app.voice.VoiceInput
+import com.maya.core.Act
 import com.maya.core.Action
 import com.maya.core.Animate
 import com.maya.core.Audio
@@ -202,6 +203,7 @@ class OverlayBody(
             // Ignored by Behavior while she is held, thrown or disconnected.
             is Move -> behavior.command(a.intent, a.target)
             is Look -> Unit // handled by the service (screenshot)
+            is Act -> Unit // handled by the service (ActionRunner)
         }
     }
 
