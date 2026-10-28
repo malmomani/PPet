@@ -31,6 +31,14 @@ class ActionsTest {
         }
         assertTrue(isRisky(press("زر إرسال")))
         assertTrue(isRisky(press("Send message")))
+        // the definite article "ال" is dropped as well
+        assertTrue(isRisky(press("الإرسال")))
+        assertTrue(isRisky(press("زر الإرسال")))
+        assertTrue(isRisky(press("الشراء")))
+        assertTrue(isRisky(press("blue"), "الدفع"))
+        assertTrue(isRisky(press("الْحَذْف")))
+        assertFalse(isRisky(press("الزر"))) // "the button"
+        assertFalse(isRisky(press("ال")))
         // not whole words
         assertFalse(isRisky(press("Callback")))
         assertFalse(isRisky(press("Ordering info")))
@@ -94,10 +102,11 @@ class ActionsTest {
             assertNull(a.kind, why(a, "com.some.app"))
             assertEquals(a.kind, "off", why(a, null, allow = false))
             assertEquals(a.kind, "locked", why(a, null, locked = true))
-            // a known place on the never list blocks these too
-            assertEquals(a.kind, "not here", why(a, "com.android.settings"))
-            assertEquals(a.kind, "not here", why(a, own))
-            assertEquals(a.kind, "not here", why(a, "com.bank.x", dnw = setOf("com.bank.x")))
+            // the never list is for what happens inside an app: these work from anywhere (e.g. Maya's own chat)
+            assertNull(a.kind, why(a, "com.android.settings"))
+            assertNull(a.kind, why(a, "com.android.systemui"))
+            assertNull(a.kind, why(a, own))
+            assertNull(a.kind, why(a, "com.bank.x", dnw = setOf("com.bank.x")))
         }
         assertEquals(setOf("com.android.systemui", "com.android.settings"), NEVER_PACKAGES)
     }
@@ -124,6 +133,13 @@ class ActionsTest {
         assertEquals("com.android.chrome", matchApp("chrom", apps))
         assertEquals("com.whatsapp", matchApp("واتساب", apps))
         assertNull(matchApp("yt music", apps)) // no false match
+        // a prefix needs 3+ characters; shorter queries only match exactly
+        assertNull(matchApp("m", apps))
+        assertNull(matchApp("ma", apps))
+        assertNull(matchApp("yo", apps))
+        assertEquals("com.google.android.apps.maps", matchApp("map", apps))
+        assertEquals("p", matchApp("p", listOf("P" to "p", "Photos" to "photos")))
+        assertEquals("ab", matchApp("ab", listOf("Abc" to "abc", "AB" to "ab")))
         assertNull(matchApp("spotify", apps))
         assertNull(matchApp("", apps))
         assertNull(matchApp("!!!", apps))

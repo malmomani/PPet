@@ -28,16 +28,22 @@ fun isRisky(act: Act, matchedLabel: String? = null): Boolean = when (act.kind) {
     "press" -> {
         val target = act.target.orEmpty()
         target.lowercase().trim() in RISKY_TAGS ||
-            words(target).any { it in RISKY_WORDS } ||
-            words(matchedLabel).any { it in RISKY_WORDS }
+            hasRiskyWord(target) || hasRiskyWord(matchedLabel)
     }
     else -> false
 }
 
+private const val ARTICLE = "ال"
+
+/** A risky whole word in [s]; an Arabic token also counts without its leading definite article ("الإرسال"). */
+private fun hasRiskyWord(s: String?): Boolean = words(s).any { w ->
+    w in RISKY_WORDS || (w.length > ARTICLE.length && w.startsWith(ARTICLE) && w.substring(ARTICLE.length) in RISKY_WORDS)
+}
+
 /**
  * Why [act] may not run, or null when it may: "off" (the switch), "locked" (keyguard), "not here"
- * (the app in front is on the never list, is Maya herself, or is do-not-watch; press/type/scroll also
- * need to know the app: [pkg] null). System kinds work without knowing the app.
+ * (press/type/scroll act inside the app in front: it must be known, and not on the never list, Maya
+ * herself, or do-not-watch). System kinds work from anywhere, whatever [pkg] is.
  */
 fun blockedReason(
     act: Act,
@@ -49,11 +55,13 @@ fun blockedReason(
 ): String? {
     if (!allowActions) return "off"
     if (keyguardLocked) return "locked"
-    if (pkg == null) return if (act.kind in PHONE_KINDS) "not here" else null
+    if (act.kind !in PHONE_KINDS) return null
+    if (pkg == null) return "not here"
     return if (pkg in NEVER_PACKAGES || pkg == ownPackage || doNotWatch(pkg)) "not here" else null
 }
 
 private const val APP_MATCH_MIN = 0.8
+private const val APP_PREFIX_MIN = 3
 private val NOT_LETTER_OR_DIGIT = Regex("[^\\p{L}\\p{N}]+")
 
 private fun normalize(s: String): String = s.lowercase().replace(NOT_LETTER_OR_DIGIT, "")
@@ -77,13 +85,15 @@ private fun similarity(a: String, b: String): Double {
 /**
  * The package of the launcher app that [query] means, from [apps] (label to package), or null.
  * Names are normalized (lower case, only letters and digits). An exact name wins, then a name
- * that starts with the query (the shortest), then the most similar one (at least 0.8).
+ * that starts with the query (the shortest; the query needs 3+ characters, a shorter one only matches
+ * exactly), then the most similar one (at least 0.8).
  */
 fun matchApp(query: String, apps: List<Pair<String, String>>): String? {
     val q = normalize(query)
     if (q.isEmpty()) return null
     val named = apps.map { (label, pkg) -> normalize(label) to pkg }.filter { it.first.isNotEmpty() }
     named.firstOrNull { it.first == q }?.let { return it.second }
+    if (q.length < APP_PREFIX_MIN) return null // a short query only matches exactly
     named.filter { it.first.startsWith(q) }.minByOrNull { it.first.length }?.let { return it.second }
     return named
         .map { it to similarity(q, it.first) }
