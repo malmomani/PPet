@@ -15,7 +15,7 @@ from .clock import SystemClock
 from .config import Config, load_config
 from .db import open_db
 from .gateway import create_app
-from .llm import LLM, LLMError, make_llm
+from .llm import LLM, EmbedWarmUpError, LLMError, make_llm
 from .mind import Mind
 from .tts import load_kokoro
 from .vision import Describer, make_describer, vision_model
@@ -95,6 +95,12 @@ def main(argv: list[str] | None = None) -> int:
     print("Loading Maya's models (the first time can take a minute)...")
     try:
         asyncio.run(llm.warm_up())
+    except EmbedWarmUpError as e:
+        print(
+            f"Warning: can't reach the embeddings server (Ollama) at {cfg.llm.embed_base_url} yet ({e}); "
+            "memory search needs it. Starting anyway.",
+            file=sys.stderr,
+        )
     except LLMError as e:
         server = "Ollama" if cfg.llm.provider.strip().lower() == "ollama" else "the language model server"
         print(f"Warning: can't reach {server} at {cfg.llm.base_url} yet ({e}); starting anyway.", file=sys.stderr)

@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import math
 import re
@@ -25,6 +26,10 @@ class LLMError(Exception):
     pass
 
 
+class EmbedWarmUpError(LLMError):
+    """The chat server answered but the Ollama embeddings server did not."""
+
+
 class LLM(Protocol):
     async def chat(self, messages: list[dict], json_mode: bool = False) -> str: ...
 
@@ -42,15 +47,29 @@ def strip_reasoning(text: str) -> str:
     return _strip_think(text)
 
 
-_HOSTED_OPENAI_SUFFIXES = ("openai.com", "openai.azure.com")
+_LOCAL_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in ("127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7")
+)
+
+
+def _is_local_host(host: str) -> bool:
+    host = host.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(addr in net for net in _LOCAL_NETWORKS if net.version == addr.version)
 
 
 def openai_think_fields(cfg: LLMConfig) -> dict:
-    """llama-server style `chat_template_kwargs` for `think`; hosted OpenAI/Azure endpoints would reject it."""
-    if cfg.think is None:
-        return {}
-    host = (urlparse(cfg.base_url).hostname or "").lower()
-    if any(host == suffix or host.endswith("." + suffix) for suffix in _HOSTED_OPENAI_SUFFIXES):
+    """llama-server style `chat_template_kwargs` for `think`, sent only to local/private servers.
+
+    Hosted APIs (OpenAI, OpenRouter, Groq, ...) never receive it: they may reject unknown fields.
+    """
+    if cfg.think is None or not _is_local_host(urlparse(cfg.base_url).hostname or ""):
         return {}
     return {"chat_template_kwargs": {"enable_thinking": cfg.think}}
 
@@ -194,7 +213,12 @@ class OpenAILLM:
         }
         await self._chat(payload, self.cfg.warmup_timeout_s)
         embed = {"model": self.cfg.embed_model, "input": "hello", "keep_alive": self.cfg.keep_alive}
-        await self._post(f"{self.cfg.embed_base_url.rstrip('/')}/api/embed", embed, timeout_s=self.cfg.warmup_timeout_s)
+        try:
+            await self._post(
+                f"{self.cfg.embed_base_url.rstrip('/')}/api/embed", embed, timeout_s=self.cfg.warmup_timeout_s
+            )
+        except LLMError as e:
+            raise EmbedWarmUpError(str(e)) from e
 
 
 def make_llm(cfg: LLMConfig, transport: httpx.AsyncBaseTransport | None = None) -> "OllamaLLM | OpenAILLM":

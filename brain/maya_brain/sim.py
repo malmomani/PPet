@@ -17,7 +17,7 @@ from pathlib import Path
 from .clock import FakeClock
 from .config import load_config
 from .db import open_db
-from .llm import FakeLLM, LLMError, make_llm
+from .llm import EmbedWarmUpError, FakeLLM, LLMError, make_llm
 from .mind import Mind
 from .protocol import (
     Action,
@@ -373,6 +373,10 @@ def main(argv: list[str] | None = None) -> int:
         print("Waking Maya up (loading the model; the first time can take a minute)...")
         try:
             asyncio.run(llm.warm_up())
+        except EmbedWarmUpError as e:
+            print(f"Can't reach the embeddings server (Ollama) at {cfg.llm.embed_base_url}: {e}", file=sys.stderr)
+            print("Memory search needs Ollama with nomic-embed-text (ollama pull nomic-embed-text).", file=sys.stderr)
+            return 1
         except LLMError as e:
             if cfg.llm.provider.strip().lower() == "ollama":
                 print(f"Can't reach Ollama at {cfg.llm.base_url}: {e}", file=sys.stderr)

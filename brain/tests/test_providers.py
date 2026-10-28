@@ -124,9 +124,12 @@ async def test_openai_think_kwargs_gated_by_host():
 
     for body in await run(think=False):
         assert body["chat_template_kwargs"] == {"enable_thinking": False}
-    for body in await run(think=True, base_url="http://192.168.1.5:8080/v1"):
-        assert body["chat_template_kwargs"] == {"enable_thinking": True}
-    for url in ("https://api.openai.com/v1", "https://x.openai.azure.com/openai", "https://eu.openai.com/v1"):
+    for url in ("http://192.168.1.5:8080/v1", "http://100.101.2.3:8080/v1", "http://127.0.0.1:8080/v1",
+                "http://[::1]:8080/v1", "http://10.1.2.3/v1", "http://172.20.0.4/v1", "http://gpu-box.local:8080/v1"):
+        for body in await run(think=True, base_url=url):
+            assert body["chat_template_kwargs"] == {"enable_thinking": True}
+    for url in ("https://api.openai.com/v1", "https://openrouter.ai/api/v1", "https://api.groq.com/openai/v1",
+                "http://172.32.0.1/v1", "http://100.128.0.1/v1", "http://localhost.evil.com/v1", "http://8.8.8.8/v1"):
         for body in await run(think=False, base_url=url):
             assert "chat_template_kwargs" not in body
     for body in await run(think=None):
@@ -202,3 +205,34 @@ def test_build_backends_warns_when_openai_points_at_ollama(caplog):
     build_backends(Config(llm=LLMConfig(**OPENAI)))
     build_backends(Config())
     assert caplog.text == ""
+
+
+async def test_openai_warm_up_names_embeddings_server_on_embed_failure():
+    from maya_brain.llm import EmbedWarmUpError
+
+    def handler(req):
+        return httpx.Response(500) if req.url.path == "/api/embed" else reply()
+
+    with pytest.raises(EmbedWarmUpError):
+        await OpenAILLM(LLMConfig(**OPENAI), transport=httpx.MockTransport(handler)).warm_up()
+
+
+def test_main_names_embeddings_server_when_only_embed_warm_up_fails(tmp_path, monkeypatch, capsys):
+    import maya_brain.__main__ as entry
+    from maya_brain.llm import EmbedWarmUpError
+
+    async def failing(self):
+        raise EmbedWarmUpError("boom")
+
+    monkeypatch.setattr(OpenAILLM, "warm_up", failing)
+    monkeypatch.setattr(entry, "Mind", lambda *a, **kw: object())
+    monkeypatch.setattr(entry, "create_app", lambda cfg, mind: object())
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: None)
+    cfg = tmp_path / "m.toml"
+    cfg.write_text(
+        f'db_path = "{tmp_path / "m.db"}"\n[server]\ntoken = "a-long-enough-secret"\n[voice]\nenabled = false\n'
+        '[llm]\nprovider = "openai"\nbase_url = "http://localhost:8080/v1"\nembed_base_url = "http://ollama-box:11434"\n'
+    )
+    assert entry.main(["--config", str(cfg)]) == 0
+    err = capsys.readouterr().err
+    assert "embeddings server" in err and "http://ollama-box:11434" in err and "8080" not in err
