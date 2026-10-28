@@ -36,6 +36,7 @@ import com.maya.app.senses.MayaAccessibilityService
 import com.maya.app.senses.MayaNotificationListener
 import com.maya.app.voice.OfflineSpeech
 import com.maya.app.voice.OfflineSpeechStatus
+import com.maya.app.voice.VoiceInput
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -57,6 +58,8 @@ class SettingsActivity : Activity() {
     private lateinit var doNotWatchField: EditText
     private lateinit var toggleButton: Button
     private lateinit var offlineSpeechRow: LinearLayout
+    private lateinit var offlineSpeechText: TextView
+    private lateinit var offlineSpeechButton: Button
     private val permissionRows = ArrayList<PermissionRow>()
 
     // Offline English speech (Android 13+ can check). Hidden until a check says it is missing.
@@ -118,18 +121,30 @@ class SettingsActivity : Activity() {
         // Maya's voice
         root.addView(text(getString(R.string.section_voice), 18f, bold = true), matchWrap(top = 20))
         root.addView(voiceModeGroup(), matchWrap(top = 4))
+        // Only Android 13+ has a strict offline recognizer to fall back from; older Android always
+        // uses the default recognizer, so the switch would do nothing there.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val allowOnlineSpeech = Switch(this)
+            allowOnlineSpeech.setText(R.string.allow_online_speech)
+            allowOnlineSpeech.textSize = 16f
+            allowOnlineSpeech.isChecked = prefs.allowOnlineSpeech
+            allowOnlineSpeech.setOnCheckedChangeListener { _, checked -> onAllowOnlineSpeechChanged(checked) }
+            root.addView(allowOnlineSpeech, matchWrap(top = 8))
+            root.addView(text(getString(R.string.allow_online_speech_note), 14f), matchWrap(top = 2))
+        }
         offlineSpeechRow = LinearLayout(this)
         offlineSpeechRow.orientation = LinearLayout.HORIZONTAL
         offlineSpeechRow.gravity = Gravity.CENTER_VERTICAL
+        offlineSpeechText = text("", 16f)
         offlineSpeechRow.addView(
-            text("✗  " + getString(R.string.offline_speech_missing), 16f),
+            offlineSpeechText,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
-        val setupSpeech = Button(this)
-        setupSpeech.setText(R.string.offline_speech_setup)
-        setupSpeech.setOnClickListener { onSetUpOfflineSpeech() }
+        offlineSpeechButton = Button(this)
+        offlineSpeechButton.setText(R.string.offline_speech_setup)
+        offlineSpeechButton.setOnClickListener { onSetUpOfflineSpeech() }
         offlineSpeechRow.addView(
-            setupSpeech,
+            offlineSpeechButton,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT),
         )
         root.addView(offlineSpeechRow, matchWrap(top = 4))
@@ -238,6 +253,14 @@ class SettingsActivity : Activity() {
         if (mode == prefs.voiceMode) return
         prefs.voiceMode = mode
         restartMayaService() // so the brain hears the new mode in the next hello
+    }
+
+    /** Read at the start of every hold, so no restart is needed; the on-device recognizer gets a fresh try. */
+    private fun onAllowOnlineSpeechChanged(on: Boolean) {
+        if (on == prefs.allowOnlineSpeech) return
+        prefs.allowOnlineSpeech = on
+        VoiceInput.forgetOnDeviceFailure()
+        showOfflineSpeech()
     }
 
     private fun onSeeNotificationsChanged(on: Boolean) {
@@ -396,7 +419,8 @@ class SettingsActivity : Activity() {
 
     /**
      * Android 13+: asks the on-device recognizer whether English is installed. Without it (or
-     * without any on-device recognizer) hold-to-talk is unavailable, so the row offers to set it up.
+     * without any on-device recognizer) hold-to-talk uses Google voice typing when allowed, which the
+     * row says; otherwise hold-to-talk is unavailable and the row offers to set it up.
      * When the recognizer can't tell, the row stays hidden.
      */
     private fun checkOfflineSpeech() {
@@ -414,6 +438,14 @@ class SettingsActivity : Activity() {
     private fun showOfflineSpeech() {
         val missing = offlineSpeech == OfflineSpeechStatus.MISSING || offlineSpeech == OfflineSpeechStatus.NO_RECOGNIZER
         offlineSpeechRow.visibility = if (missing) View.VISIBLE else View.GONE
+        if (!missing) return
+        if (prefs.allowOnlineSpeech) {
+            offlineSpeechText.text = getString(R.string.offline_speech_using_google)
+            offlineSpeechButton.visibility = View.GONE
+        } else {
+            offlineSpeechText.text = "✗  " + getString(R.string.offline_speech_missing)
+            offlineSpeechButton.visibility = View.VISIBLE
+        }
     }
 
     /**

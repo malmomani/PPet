@@ -10,18 +10,24 @@ import android.os.Looper
 import android.os.SystemClock
 import android.speech.SpeechRecognizer
 import android.util.Log
+import com.maya.app.Prefs
 
 /**
  * Hold-to-talk speech input. [start] begins a session, [stop] ends capture and delivers the result,
  * [cancel] drops it. Every started session ends with exactly one of [Listener.onFinal],
- * [Listener.onNoMatch] or [Listener.onUnavailable] with [Reason.NO_RECOGNIZER], [Reason.PERMISSION]
- * or [Reason.MIC_BUSY] (unless cancelled). [Listener.onReady] reports when the mic is actually
- * capturing. The recognizer also ends a session by itself after ~2 s of silence.
+ * [Listener.onNoMatch] or [Listener.onUnavailable] with a [Reason] other than
+ * [Reason.BACKGROUND_DENIED] (unless cancelled). [Listener.onReady] reports when the mic is
+ * actually capturing. The recognizer also ends a session by itself after ~2 s of silence.
  * Callbacks may arrive synchronously from [start]. Main thread only. Transcripts are never logged.
  *
- * Privacy: on Android 13+ only the on-device recognizer is used, so audio never leaves the phone;
- * without it (or without its English model) input is unavailable. Older Android uses the default
- * recognizer with EXTRA_PREFER_OFFLINE.
+ * Privacy / recognizer choice: on Android 13+ the on-device recognizer is used first, so audio
+ * stays on the phone. If it is missing, or fails before it is ready (no English model, service
+ * error), and [Prefs.allowOnlineSpeech] is on, the same session is retried once with the default
+ * recognizer (Google voice typing) with EXTRA_PREFER_OFFLINE, which may process audio online; the
+ * failure is remembered for the rest of the process, so later sessions go straight to the default
+ * recognizer (see [forgetOnDeviceFailure]). With the pref off, only the on-device recognizer is
+ * used and input is unavailable without it. Older Android always uses the default recognizer with
+ * EXTRA_PREFER_OFFLINE.
  *
  * Mic rights: on Android 14+ a background service may not record, so every session runs inside
  * [VoiceActivity], a translucent foreground activity. Below 14 the recognizer first runs from the
@@ -38,7 +44,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
         fun onNoMatch()
 
         /**
-         * [Reason.NO_RECOGNIZER], [Reason.PERMISSION] and [Reason.MIC_BUSY] end the session.
+         * Every reason except [Reason.BACKGROUND_DENIED] ends the session.
          * [Reason.MIC_BUSY] means the mic failed although RECORD_AUDIO is granted (another app holds
          * it, or Android refused it this time). [Reason.BACKGROUND_DENIED]
          * is only a notice (sent once, below Android 14): the session carries on through
@@ -47,11 +53,23 @@ class VoiceInput(context: Context, private val listener: Listener) {
         fun onUnavailable(reason: Reason)
     }
 
-    enum class Reason { NO_RECOGNIZER, PERMISSION, MIC_BUSY, BACKGROUND_DENIED }
+    enum class Reason {
+        /** The phone has no speech recognizer at all. */
+        NO_RECOGNIZER,
+
+        /** Only the on-device recognizer may be used, and it is missing or has no English model. */
+        OFFLINE_MISSING,
+
+        /** The default recognizer (Google voice typing) failed, e.g. no network and no offline pack. */
+        RECOGNITION_FAILED,
+        PERMISSION,
+        MIC_BUSY,
+        BACKGROUND_DENIED,
+    }
 
     private val ctx: Context = context
+    private val prefs = Prefs(context)
     private val main = Handler(Looper.getMainLooper())
-    private val onDeviceOnly = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
     private val readyTimeout = Runnable { onReadyTimeout() }
     private val finishTimeout = Runnable { if (active) deliverHeard() }
     private val busyRetry = Runnable { if (active) launch() }
@@ -70,6 +88,12 @@ class VoiceInput(context: Context, private val listener: Listener) {
     private var readyAtMs = 0L
     private var stopAtMs = 0L
     private var lastPartial = ""
+
+    /** This launch uses the on-device recognizer (Android 13+); otherwise the default one. */
+    private var useOnDevice = false
+
+    /** An on-device failure before ready may still retry this session with the default recognizer. */
+    private var canFallBack = false
     private var direct: SpeechSession? = null
     private var request: VoiceBridge.Request? = null
 
@@ -82,8 +106,9 @@ class VoiceInput(context: Context, private val listener: Listener) {
             listener.onUnavailable(Reason.PERMISSION)
             return
         }
-        if (!recognizerAvailable()) {
-            listener.onUnavailable(Reason.NO_RECOGNIZER)
+        val unavailable = chooseRecognizer()
+        if (unavailable != null) {
+            listener.onUnavailable(unavailable)
             return
         }
         active = true
@@ -128,7 +153,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
         main.removeCallbacks(readyTimeout)
         val relay = Relay(gen)
         if (activityMode) {
-            val req = VoiceBridge.Request(onDeviceOnly, relay)
+            val req = VoiceBridge.Request(useOnDevice, relay)
             request = req
             VoiceBridge.current = req
             val intent = Intent(ctx, VoiceActivity::class.java)
@@ -142,7 +167,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
             }
             main.postDelayed(readyTimeout, ACTIVITY_READY_TIMEOUT_MS)
         } else {
-            val s = SpeechSession(ctx, onDeviceOnly, relay)
+            val s = SpeechSession(ctx, useOnDevice, relay)
             if (!s.start()) {
                 fallbackToActivity()
                 return
@@ -177,10 +202,10 @@ class VoiceInput(context: Context, private val listener: Listener) {
             SpeechRecognizer.ERROR_AUDIO -> {
                 if (activityMode) fail(micFailure()) else fallbackToActivity()
             }
-            // No English model for the recognizer. Never fall back to a recognizer that might send
-            // audio off the phone: the user installs offline English speech instead.
+            // No English model for the recognizer. The on-device one may hand over to the default
+            // recognizer (only when the user allows it); otherwise input is unavailable.
             SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
-                fail(Reason.NO_RECOGNIZER)
+                if (!ready && canFallBack) fallBackToDefault(code) else fail(recognizerFailure())
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
                 if (busyRetried || stopRequested) {
                     deliverHeard()
@@ -195,13 +220,21 @@ class VoiceInput(context: Context, private val listener: Listener) {
             // the on-device recognizer). After a release, these are just the end of a short hold.
             SpeechRecognizer.ERROR_SERVER, SpeechRecognizer.ERROR_SERVER_DISCONNECTED, SpeechRecognizer.ERROR_CLIENT ->
                 if (!ready && !stopRequested) {
-                    fail(Reason.NO_RECOGNIZER)
+                    if (canFallBack) fallBackToDefault(code) else fail(recognizerFailure())
+                } else {
+                    noteSilence()
+                    deliverHeard()
+                }
+            // The default recognizer had no offline model and no network. Words heard so far still count.
+            SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                if (!useOnDevice && lastPartial.isBlank()) {
+                    fail(Reason.RECOGNITION_FAILED)
                 } else {
                     noteSilence()
                     deliverHeard()
                 }
             else -> {
-                // No match, speech timeout, network errors: deliver what we have.
+                // No match, speech timeout: deliver what we have.
                 noteSilence()
                 deliverHeard()
             }
@@ -239,6 +272,19 @@ class VoiceInput(context: Context, private val listener: Listener) {
             listener.onUnavailable(Reason.BACKGROUND_DENIED)
             if (!active) return // the listener cancelled
         }
+        if (stopRequested) deliverHeard() else launch()
+    }
+
+    /**
+     * The on-device recognizer failed before it was ready: remember that for this process and run
+     * the same session once more with the default recognizer (Google voice typing).
+     */
+    private fun fallBackToDefault(code: Int) {
+        onDeviceFailed = true
+        useOnDevice = false
+        canFallBack = false
+        Log.i(TAG, "on-device recognizer failed (error $code); using the default recognizer")
+        tearDown()
         if (stopRequested) deliverHeard() else launch()
     }
 
@@ -281,13 +327,61 @@ class VoiceInput(context: Context, private val listener: Listener) {
     /** The mic never started: blame the permission only when it really is missing. */
     private fun micFailure(): Reason = if (hasMicPermission()) Reason.MIC_BUSY else Reason.PERMISSION
 
-    /** Android 13+: the on-device recognizer only. Older: any recognizer service. */
-    private fun recognizerAvailable(): Boolean = try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)
-        } else {
-            SpeechRecognizer.isRecognitionAvailable(ctx)
+    /** Why the recognizer in use could not listen at all. */
+    private fun recognizerFailure(): Reason = if (useOnDevice) Reason.OFFLINE_MISSING else Reason.RECOGNITION_FAILED
+
+    /**
+     * Picks the recognizer for a new session (sets [useOnDevice] and [canFallBack]). Returns why
+     * input is unavailable, or null when a recognizer was chosen.
+     */
+    private fun chooseRecognizer(): Reason? {
+        val defaultAvailable = defaultRecognizerAvailable()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            useOnDevice = false
+            canFallBack = false
+            return if (defaultAvailable) null else Reason.NO_RECOGNIZER
         }
+        val onDeviceAvailable = onDeviceRecognizerAvailable()
+        if (!prefs.allowOnlineSpeech) {
+            // Strict: on-device only, so audio never leaves the phone.
+            useOnDevice = true
+            canFallBack = false
+            return when {
+                onDeviceAvailable -> null
+                defaultAvailable -> Reason.OFFLINE_MISSING
+                else -> Reason.NO_RECOGNIZER
+            }
+        }
+        return when {
+            onDeviceAvailable && !onDeviceFailed -> {
+                useOnDevice = true
+                canFallBack = defaultAvailable
+                null
+            }
+            defaultAvailable -> {
+                useOnDevice = false
+                canFallBack = false
+                null
+            }
+            onDeviceAvailable -> {
+                // It failed earlier, but it is all there is.
+                useOnDevice = true
+                canFallBack = false
+                null
+            }
+            else -> Reason.NO_RECOGNIZER
+        }
+    }
+
+    /** Android 12+ API, only called on Android 13+. */
+    private fun onDeviceRecognizerAvailable(): Boolean = try {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)
+    } catch (e: RuntimeException) {
+        false
+    }
+
+    private fun defaultRecognizerAvailable(): Boolean = try {
+        SpeechRecognizer.isRecognitionAvailable(ctx)
     } catch (e: RuntimeException) {
         false
     }
@@ -320,12 +414,20 @@ class VoiceInput(context: Context, private val listener: Listener) {
         }
     }
 
-    private companion object {
-        const val TAG = "MayaVoiceInput"
-        const val READY_TIMEOUT_MS = 1500L
-        const val ACTIVITY_READY_TIMEOUT_MS = 4000L
-        const val FINISH_TIMEOUT_MS = 5000L
-        const val SILENT_HOLD_MS = 1500L
-        const val BUSY_RETRY_MS = 300L
+    companion object {
+        private const val TAG = "MayaVoiceInput"
+        private const val READY_TIMEOUT_MS = 1500L
+        private const val ACTIVITY_READY_TIMEOUT_MS = 4000L
+        private const val FINISH_TIMEOUT_MS = 5000L
+        private const val SILENT_HOLD_MS = 1500L
+        private const val BUSY_RETRY_MS = 300L
+
+        /** The on-device recognizer failed in this process: later sessions use the default one. Main thread only. */
+        private var onDeviceFailed = false
+
+        /** Try the on-device recognizer again from the next session (the user changed the speech setting). */
+        fun forgetOnDeviceFailure() {
+            onDeviceFailed = false
+        }
     }
 }

@@ -603,7 +603,10 @@ class OverlayBody(
             val res = when (reason) {
                 VoiceInput.Reason.PERMISSION -> R.string.bubble_mic_failed
                 VoiceInput.Reason.MIC_BUSY -> R.string.bubble_mic_busy
-                else -> R.string.bubble_no_recognizer
+                VoiceInput.Reason.NO_RECOGNIZER -> R.string.bubble_no_recognizer
+                VoiceInput.Reason.OFFLINE_MISSING -> R.string.bubble_offline_missing
+                VoiceInput.Reason.RECOGNITION_FAILED -> R.string.bubble_recognition_failed
+                VoiceInput.Reason.BACKGROUND_DENIED -> return
             }
             if (visible) bubble.say(ctx.getString(res), VOICE_PROBLEM_BUBBLE_MS)
             holdEndBubble()

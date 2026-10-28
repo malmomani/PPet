@@ -26,6 +26,9 @@
     <string name="voice_off">Off</string>
     <string name="voice_replies">Only when I talk to her</string>
     <string name="voice_always">Always</string>
+    <string name="allow_online_speech">Allow Google voice typing</string>
+    <string name="allow_online_speech_note">If offline speech isn\'t available, use the phone\'s Google voice typing. It prefers offline, but Google may sometimes process your voice online.</string>
+    <string name="offline_speech_using_google">Using Google voice typing</string>
     <string name="offline_speech_missing">Offline English speech: not installed</string>
     <string name="offline_speech_setup">Set up</string>
     <string name="offline_speech_downloading">Downloading offline English (US)… If nothing happens, tap Set up again.</string>
@@ -59,5 +62,7 @@
     <string name="bubble_no_match">…didn\'t catch that 🤔</string>
     <string name="bubble_mic_failed">I can\'t hear you — check mic permission</string>
     <string name="bubble_mic_busy">I can\'t hear you — mic busy, try again</string>
-    <string name="bubble_no_recognizer">I can\'t hear you — set up offline English speech in my settings</string>
+    <string name="bubble_no_recognizer">I can\'t hear you — this phone has no speech recognizer</string>
+    <string name="bubble_offline_missing">I can\'t hear you — set up offline English speech in my settings</string>
+    <string name="bubble_recognition_failed">I can\'t hear you — speech recognition failed, try again</string>
 </resources>

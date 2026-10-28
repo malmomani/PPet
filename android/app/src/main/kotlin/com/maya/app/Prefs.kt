@@ -45,6 +45,14 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_READ_SCREEN, true)
         set(value) = sp.edit().putBoolean(KEY_READ_SCREEN, value).apply()
 
+    /**
+     * "Allow Google voice typing": when the on-device recognizer is missing or fails (Android 13+),
+     * hold-to-talk uses the default recognizer, which prefers offline but may process audio online.
+     */
+    var allowOnlineSpeech: Boolean
+        get() = sp.getBoolean(KEY_ALLOW_ONLINE_SPEECH, true)
+        set(value) = sp.edit().putBoolean(KEY_ALLOW_ONLINE_SPEECH, value).apply()
+
     /** The brain's WebSocket URL, or null until both host and token are set. Contains the token: never log it. */
     fun wsUrl(): String? {
         val h = host.trim()
@@ -69,5 +77,6 @@ class Prefs(context: Context) {
         private const val KEY_VOICE_MODE = "voice_mode"
         private const val KEY_SEE_NOTIFICATIONS = "see_notifications"
         private const val KEY_READ_SCREEN = "read_screen"
+        private const val KEY_ALLOW_ONLINE_SPEECH = "allow_online_speech"
     }
 }
