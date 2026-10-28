@@ -51,11 +51,11 @@ private val TAG_WORDS: Map<String, Set<String>> = mapOf(
 )
 
 private val NON_WORD = Regex("[^\\p{L}\\p{N}]+")
-private val MARKS = Regex("\\p{M}+")
+private val MARKS = Regex("[\\p{M}\\u0640]+") // combining marks and the Arabic tatweel
 
 /**
  * Lower-cased words: runs of letters/digits (Unicode-aware, so Arabic works). Combining marks
- * (Arabic diacritics) are stripped first, so "إِرْسَال" is the word "إرسال".
+ * (Arabic diacritics) and the tatweel are stripped first, so "إِرْسَال" is the word "إرسال".
  */
 internal fun words(s: String?): List<String> =
     if (s == null) emptyList() else s.lowercase().replace(MARKS, "").split(NON_WORD).filter { it.isNotEmpty() }

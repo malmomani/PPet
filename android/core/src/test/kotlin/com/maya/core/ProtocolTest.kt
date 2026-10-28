@@ -273,6 +273,7 @@ class ProtocolTest {
             """"kind":"press","target":""""", """"kind":"press","target":"${"x".repeat(41)}"""", """"kind":"press"""",
             """"kind":"type","text":""""", """"kind":"type","text":"${"x".repeat(501)}"""", """"kind":"type"""",
             """"kind":"type","text":"hi","into":"${"x".repeat(41)}"""",
+            """"kind":"open_app","app":"   """", """"kind":"press","target":" \t """", """"kind":"web_search","query":"  """", """"kind":"type","text":" """",
         )) assertNull("should be rejected: $bad", d(bad))
         assertNull(Protocol.decodeAction("""{"type":"act"}"""))
         // boundaries accepted

@@ -625,8 +625,51 @@ class BehaviorCommandTest {
         c.setLayout(layout(Platform(400, 600, 1500)))
         c.putFeet(300f, H.toFloat())
         c.commandPress(btn)
-        c.command("stay", null) // replaced: no longer pressing
+        c.command("stay", null) // replaced: she tells the runner
+        assertTrue(c.pressTargetLost()); assertFalse(c.pressTargetLost())
         c.runFor(8000)
         assertFalse(c.pressDone()); assertFalse(c.pressTargetLost())
+    }
+
+    @Test fun press_dropped_by_disconnect_drag_or_replacement_is_lost() {
+        val btn = Box(400, 1500, 600, 1560)
+        fun walking() = mk(speed = 200f).also {
+            it.setLayout(layout(Platform(400, 600, 1500))); it.putFeet(300f, H.toFloat()); it.commandPress(btn)
+        }
+        fun falling() = mk(speed = 200f).also {
+            it.setLayout(layout(Platform(400, 600, 1500))); it.putFeet(200f, 600f); it.commandPress(btn) // deferred
+        }
+        fun gesturing() = mk(speed = 200f).also {
+            it.setLayout(layout(Platform(400, 600, 1500))); it.putFeet(300f, H.toFloat()); it.play("wave"); it.commandPress(btn) // deferred
+        }
+        for ((name, mkB) in listOf("walking" to ::walking, "falling" to ::falling, "gesturing" to ::gesturing)) {
+            val a = mkB(); a.setConnected(false)
+            assertTrue("$name disconnect", a.pressTargetLost()); assertFalse(a.pressDone())
+            a.setConnected(true); a.runFor(8000)
+            assertFalse("$name after reconnect", a.pressDone()); assertFalse(a.pressTargetLost())
+
+            val d = mkB(); d.dragStart()
+            assertTrue("$name drag", d.pressTargetLost()); assertFalse(d.pressDone())
+            d.dragEnd(300f, 800f); d.runFor(8000)
+            assertFalse("$name after drag", d.pressDone()); assertFalse(d.pressTargetLost())
+
+            val r = mkB(); r.command("sit", null)
+            assertTrue("$name replaced", r.pressTargetLost()); assertFalse(r.pressDone())
+            r.runFor(8000); assertFalse("$name after replace", r.pressDone())
+
+            val t = mkB(); t.commandPress(Box(100, 900, 200, 960)) // a new press supersedes the old: still exactly one result
+            assertFalse(t.pressTargetLost())
+        }
+        // a poke already started is not lost by what comes after
+        val s = walking(); s.settle()
+        assertEquals("poke", s.animation)
+        s.setConnected(false)
+        assertFalse(s.pressTargetLost()); assertTrue(s.pressDone())
+        val q = walking(); q.settle(); q.command("stay", null)
+        assertFalse(q.pressTargetLost()); assertTrue(q.pressDone())
+        // shooed while walking
+        val h = mk(speed = 100f)
+        h.setLayout(layout(Platform(100, 200, 900))); h.commandPress(Box(100, 900, 200, 960)); h.tick(500)
+        assertTrue(h.tapped()); assertTrue(h.pressTargetLost()); assertFalse(h.pressDone())
     }
 }

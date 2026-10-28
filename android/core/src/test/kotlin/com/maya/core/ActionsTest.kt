@@ -14,56 +14,90 @@ private fun node(
     clickable: Boolean = true, editable: Boolean = false,
 ) = UiNode(Box(l, t, r, b), clickable, editable, false, viewId, description, text)
 
+private fun btn(text: String) = node(0, 0, 100, 50, text = text)
+
 class ActionsTest {
     // ---- risk ----
 
     @Test fun risky_press_needs_confirmation() {
-        for (tag in listOf("send", "share", "comment", "follow")) assertTrue(tag, isRisky(press(tag)))
-        for (tag in listOf("like", "play", "search")) assertFalse(tag, isRisky(press(tag)))
+        for (tag in listOf("send", "share", "comment", "follow")) assertTrue(tag, isRisky(press(tag), null))
+        for (tag in listOf("like", "play", "search")) assertFalse(tag, isRisky(press(tag), null))
         // whole English words in the target, any case
         for (w in listOf("Send", "post", "PUBLISH", "buy now", "Pay", "order", "checkout", "purchase", "delete", "remove",
             "call", "dial", "share", "subscribe", "follow", "confirm", "submit", "install", "uninstall", "reply")) {
-            assertTrue(w, isRisky(press(w)))
+            assertTrue(w, isRisky(press(w), null))
         }
         // Arabic, also with diacritics
         for (w in listOf("إرسال", "ارسال", "نشر", "شراء", "دفع", "حذف", "اتصال", "مشاركة", "متابعة", "اشتراك", "تأكيد", "إِرْسَال")) {
-            assertTrue(w, isRisky(press(w)))
+            assertTrue(w, isRisky(press(w), null))
         }
-        assertTrue(isRisky(press("زر إرسال")))
-        assertTrue(isRisky(press("Send message")))
+        assertTrue(isRisky(press("زر إرسال"), null))
+        assertTrue(isRisky(press("Send message"), null))
         // the definite article "ال" is dropped as well
-        assertTrue(isRisky(press("الإرسال")))
-        assertTrue(isRisky(press("زر الإرسال")))
-        assertTrue(isRisky(press("الشراء")))
-        assertTrue(isRisky(press("blue"), "الدفع"))
-        assertTrue(isRisky(press("الْحَذْف")))
-        assertFalse(isRisky(press("الزر"))) // "the button"
-        assertFalse(isRisky(press("ال")))
+        assertTrue(isRisky(press("الإرسال"), null))
+        assertTrue(isRisky(press("زر الإرسال"), null))
+        assertTrue(isRisky(press("الشراء"), null))
+        assertTrue(isRisky(press("blue"), btn("الدفع")))
+        assertTrue(isRisky(press("الْحَذْف"), null))
+        assertFalse(isRisky(press("الزر"), null)) // "the button"
+        assertFalse(isRisky(press("ال"), null))
         // not whole words
-        assertFalse(isRisky(press("Callback")))
-        assertFalse(isRisky(press("Ordering info")))
-        assertFalse(isRisky(press("Recall")))
-        assertFalse(isRisky(press("Settings")))
-        assertFalse(isRisky(press("Next")))
+        assertFalse(isRisky(press("Callback"), null))
+        assertFalse(isRisky(press("Ordering info"), null))
+        assertFalse(isRisky(press("Recall"), null))
+        assertFalse(isRisky(press("Settings"), null))
+        assertFalse(isRisky(press("Next"), null))
         // the matched node's label counts too
-        assertFalse(isRisky(press("blue button"), "OK"))
-        assertTrue(isRisky(press("blue button"), "Pay $5"))
-        assertTrue(isRisky(press("big button"), "ارسال"))
-        assertFalse(isRisky(press("like"), "Like"))
-        assertTrue(isRisky(press("like"), "Like and Subscribe"))
+        assertFalse(isRisky(press("blue button"), btn("OK")))
+        assertTrue(isRisky(press("blue button"), btn("Pay $5")))
+        assertTrue(isRisky(press("big button"), btn("ارسال")))
+        assertFalse(isRisky(press("like"), btn("Like")))
+        assertTrue(isRisky(press("like"), btn("Like and Subscribe")))
         assertFalse(isRisky(press("blue button"), null))
     }
 
+    @Test fun risk_looks_at_the_whole_button() {
+        val p = press("the blue one")
+        // text says one thing, description another: both count
+        assertTrue(isRisky(p, node(0, 0, 100, 50, text = "Continue", description = "Confirm payment")))
+        assertTrue(isRisky(p, node(0, 0, 100, 50, text = "Pay", description = "Continue")))
+        assertFalse(isRisky(p, node(0, 0, 100, 50, text = "Continue", description = "Next step")))
+        // the view id tail
+        assertTrue(isRisky(p, node(0, 0, 100, 50, text = "OK", viewId = "com.shop:id/buy_button")))
+        assertFalse(isRisky(p, node(0, 0, 100, 50, text = "OK", viewId = "com.shop:id/buyer_ok")))
+        assertFalse(isRisky(p, node(0, 0, 100, 50, text = "OK", viewId = "com.delete.me:id/ok_button"))) // only the tail
+        // a risky tag of the node
+        assertTrue(isRisky(p, node(0, 0, 100, 50, viewId = "com.x:id/send")))
+        assertTrue(isRisky(p, node(0, 0, 100, 50, description = "Share")))
+        // what the user typed in an editable field is not read
+        assertFalse(isRisky(p, node(0, 0, 100, 50, text = "send", editable = true)))
+        assertFalse(isRisky(p, node(0, 0, 100, 50, text = "send me money", description = "Message", editable = true)))
+        assertTrue(isRisky(p, node(0, 0, 100, 50, text = "x", description = "Send", editable = true)))
+        // no node, no words: harmless; a non-press is never made risky by a node
+        assertFalse(isRisky(p, null))
+        assertFalse(isRisky(Act("scroll", dir = "up", id = "s"), node(0, 0, 100, 50, text = "Pay")))
+        assertTrue(isRisky(Act("type", text = "hi", id = "t"), null))
+    }
+
+    @Test fun arabic_prefixes_and_tatweel() {
+        for (w in listOf("للدفع", "بالإرسال", "والإرسال", "وبالإرسال", "وللدفع", "الشراء", "للحذف", "بالدفع", "إرســال", "الإرســال")) {
+            assertTrue(w, isRisky(press(w), null))
+        }
+        // not risky: the same letters in other words
+        for (w in listOf("للقراءة", "بالتأكيدات", "والزر", "لل", "وال", "بال", "ولد")) assertFalse(w, isRisky(press(w), null))
+        assertTrue(isRisky(press("x"), btn("بالإرسال")))
+    }
+
     @Test fun type_is_always_risky_and_system_kinds_are_not() {
-        assertTrue(isRisky(Act("type", text = "hello", id = "t")))
-        assertTrue(isRisky(Act("type", text = "hello", into = "note", id = "t")))
-        assertFalse(isRisky(Act("open_app", app = "Call of Duty", id = "o")))
-        assertFalse(isRisky(Act("media", key = "next", id = "m")))
-        assertFalse(isRisky(Act("timer", seconds = 60, label = "delete", id = "t")))
-        assertFalse(isRisky(Act("alarm", hour = 7, minute = 0, id = "a")))
-        assertFalse(isRisky(Act("volume", dir = "up", id = "v")))
-        assertFalse(isRisky(Act("web_search", query = "buy shoes", id = "w")))
-        assertFalse(isRisky(Act("scroll", dir = "down", id = "s")))
+        assertTrue(isRisky(Act("type", text = "hello", id = "t"), null))
+        assertTrue(isRisky(Act("type", text = "hello", into = "note", id = "t"), null))
+        assertFalse(isRisky(Act("open_app", app = "Call of Duty", id = "o"), null))
+        assertFalse(isRisky(Act("media", key = "next", id = "m"), null))
+        assertFalse(isRisky(Act("timer", seconds = 60, label = "delete", id = "t"), null))
+        assertFalse(isRisky(Act("alarm", hour = 7, minute = 0, id = "a"), null))
+        assertFalse(isRisky(Act("volume", dir = "up", id = "v"), null))
+        assertFalse(isRisky(Act("web_search", query = "buy shoes", id = "w"), null))
+        assertFalse(isRisky(Act("scroll", dir = "down", id = "s"), null))
     }
 
     // ---- blocked ----
@@ -87,6 +121,9 @@ class ActionsTest {
 
         // press / type / scroll need a pkg
         assertEquals("not here", why(scroll, null))
+        assertEquals("not here", why(scroll, ""))
+        assertEquals("not here", why(press("send"), "  "))
+        assertNull(why(Act("media", key = "next", id = "m"), " "))
         assertEquals("not here", why(press("send"), null))
         assertEquals("not here", why(Act("type", text = "x", id = "t"), null))
         assertNull(why(press("send"), "com.some.app")) // risky is not blocked: it is confirmed

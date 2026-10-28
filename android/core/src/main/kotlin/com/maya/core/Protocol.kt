@@ -397,8 +397,9 @@ object Protocol {
     private val VOLUME_DIRS = setOf("up", "down", "mute")
     private val SCROLL_DIRS = setOf("up", "down")
 
-    /** A string field of [min]..[max] chars, else null. */
-    private fun JsonObject.text(key: String, min: Int, max: Int): String? = str(key)?.takeIf { it.length in min..max }
+    /** A string field of [min]..[max] chars that is not blank, else null. */
+    private fun JsonObject.text(key: String, min: Int, max: Int): String? =
+        str(key)?.takeIf { it.length in min..max && it.isNotBlank() }
 
     /** An optional string field that is present (not null) but not a string of at most [max] chars. */
     private fun JsonObject.badOptional(key: String, max: Int): Boolean {

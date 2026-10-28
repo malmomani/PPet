@@ -162,6 +162,8 @@ class Behavior(
 
     private var goal: Goal? = null
     private var tease: Tease? = null
+    /** A press asked for and not yet poked or lost (walking, deferred, or waiting): dropping it must say so. */
+    private var pressPending = false
     private var pressStarted = false
     private var pressLost = false
     /** At most one command and one play, in the order they arrived; run on landing (a command also when a one-shot ends). */
@@ -337,16 +339,27 @@ class Behavior(
     /**
      * `press`: like a `poke` on [target], any box on screen (a button found by its label). She walks
      * to it, lands on or beside it and plays `poke`; [pressDone] says when the poke starts and
-     * [pressTargetLost] when she gave up (6 s, as a tease), the box is out of reach, or she is
-     * restricted (or dragged or offline). Waits for a landing or a gesture like any move.
+     * [pressTargetLost] when it will not happen: she gave up (6 s, as a tease), the box is out of
+     * reach, she is restricted, dragged or offline, she was shooed, or another command replaced it.
+     * Exactly one of the two is reported for every press (a new press replaces an unfinished one
+     * silently). Waits for a landing or a gesture like any move.
+     *
+     * For the runner: the 6 s give-up only counts while she is free to move (it pauses during poses
+     * such as talk), so keep your own wall-clock cap; re-resolve the node just before clicking
+     * (the screen moves while she walks); read [pressDone] and [pressTargetLost] every frame.
      */
     fun commandPress(target: Box) = startCommand("poke", null, target)
 
     private fun startCommand(intent: String, tag: String?, press: Box?) {
-        pressStarted = false
-        pressLost = false
+        if (press == null) {
+            if (pressPending) losePress() // another command replaces the press (even a deferred one)
+        } else {
+            pressStarted = false
+            pressLost = false
+            pressPending = true
+        }
         if (dragging || !connected || intent !in MOVE_INTENTS) {
-            if (press != null) pressLost = true
+            if (press != null) losePress()
             return
         }
         if (airborne || mode == Mode.ONE_SHOT) return defer(DeferredCmd(intent, tag, press))
@@ -385,7 +398,7 @@ class Behavior(
             return false
         }
         if (tz.phase == Phase.SULK) return true
-        loseUnfinishedPress(tz)
+        if (tz.press) losePendingPress()
         moments.add(Moment("shooed", if (tz.press) null else tz.tag))
         if (mode == Mode.TEASE) {
             tz.phase = Phase.SULK
@@ -424,16 +437,17 @@ class Behavior(
             if (mode == Mode.TEASE) hopOff() else endTease()
             goal = null
             deferred.clear()
+            losePendingPress()
         }
         if (on && !airborne) goIdle()
     }
 
     fun dragStart() {
         dragging = true
-        tease?.let { loseUnfinishedPress(it) }
         tease = null
         goal = null
         deferred.clear()
+        losePendingPress()
         pendingFell = null
         platform = null
         jumpTarget = null
@@ -597,7 +611,7 @@ class Behavior(
     /** The move cannot be finished; a tease plays `happy` instead. */
     private fun giveUp() {
         val teasing = tease != null
-        if (tease?.press == true) pressLost = true
+        if (tease?.press == true) losePress()
         endTease()
         goal = null
         if (!airborne) goIdle()
@@ -652,7 +666,7 @@ class Behavior(
     /** A poke on [box]; out of reach (restricted, or not above the floor) it is lost at once, without a `happy`. */
     private fun startPress(box: Box) {
         if (restricted || box.top >= floorY || box.width <= 0 || box.height <= 0) {
-            pressLost = true
+            losePress()
             return
         }
         val t = Target(PRESS, box)
@@ -661,9 +675,14 @@ class Behavior(
         startGoal(Goal(tz.surface, targetX(tz), Arrive.TEASE))
     }
 
-    /** A press cut short before her poke started (shooed, dragged away) is lost. */
-    private fun loseUnfinishedPress(tz: Tease) {
-        if (tz.press && mode != Mode.TEASE) pressLost = true
+    private fun losePress() {
+        pressPending = false
+        pressLost = true
+    }
+
+    /** A press cut short before her poke started (shooed, dragged away, offline) is lost; one already poking is not. */
+    private fun losePendingPress() {
+        if (pressPending) losePress()
     }
 
     /** True once, right after her poke on the [commandPress] box starts. */
@@ -713,7 +732,10 @@ class Behavior(
         } else {
             tz.phase = Phase.POKE
             remainingMs = POKE_MS.toLong()
-            if (tz.press) pressStarted = true
+            if (tz.press) {
+                pressPending = false
+                pressStarted = true
+            }
         }
         placeOnTarget(tz)
     }

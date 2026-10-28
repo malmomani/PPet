@@ -20,30 +20,52 @@ val NEVER_PACKAGES: Set<String> = setOf("com.android.systemui", "com.android.set
 private val PHONE_KINDS = setOf("press", "type", "scroll") // act on the screen of an app
 
 /**
- * Whether [act] needs the user's yes first: any `type`, and a `press` whose target is a risky tag, or
- * whose target text or [matchedLabel] (the label of the node it found) holds a risky word.
+ * Whether [act] needs the user's yes first: any `type`, and a `press` whose target is a risky tag
+ * or holds a risky word, or whose [matched] node (the one it found, null if none) is risky: a risky
+ * tag via [tagOf], or a risky word in its description, its text (not when editable: that is what
+ * the user typed) or its view id. The runner passes the node, not a label, so the check cannot
+ * be skipped by a button whose text and description differ.
  */
-fun isRisky(act: Act, matchedLabel: String? = null): Boolean = when (act.kind) {
+fun isRisky(act: Act, matched: UiNode?): Boolean = when (act.kind) {
     "type" -> true
     "press" -> {
         val target = act.target.orEmpty()
-        target.lowercase().trim() in RISKY_TAGS ||
-            hasRiskyWord(target) || hasRiskyWord(matchedLabel)
+        target.lowercase().trim() in RISKY_TAGS || hasRiskyWord(target) || (matched != null && nodeRisky(matched))
     }
     else -> false
 }
 
-private const val ARTICLE = "ال"
+private fun nodeRisky(n: UiNode): Boolean =
+    tagOf(n) in RISKY_TAGS ||
+        hasRiskyWord(n.description) ||
+        (!n.editable && hasRiskyWord(n.text)) ||
+        hasRiskyWord(n.viewId?.substringAfterLast('/'))
 
-/** A risky whole word in [s]; an Arabic token also counts without its leading definite article ("الإرسال"). */
-private fun hasRiskyWord(s: String?): Boolean = words(s).any { w ->
-    w in RISKY_WORDS || (w.length > ARTICLE.length && w.startsWith(ARTICLE) && w.substring(ARTICLE.length) in RISKY_WORDS)
+private const val ARTICLE = "ال"
+private val ARABIC_PREFIXES = listOf("", "ب", "ل") // bi-, li-: "بالإرسال", "للدفع" (li + al = lil)
+
+/** The forms of [w] without an Arabic definite article, with and without a leading و ("and"), bi- or li-. */
+private fun withoutArticle(w: String): List<String> {
+    val out = ArrayList<String>(2)
+    for (base in if (w.startsWith("و")) listOf(w, w.substring(1)) else listOf(w)) {
+        if (base.startsWith("لل")) out.add(base.substring(2))
+        for (p in ARABIC_PREFIXES) if (base.startsWith(p + ARTICLE)) out.add(base.substring(p.length + ARTICLE.length))
+    }
+    return out.filter { it.isNotEmpty() }
 }
+
+/** A risky whole word in [s]; an Arabic token also counts without its article and prefix ("الإرسال", "والإرسال", "للدفع"). */
+private fun hasRiskyWord(s: String?): Boolean =
+    words(s).any { w -> w in RISKY_WORDS || withoutArticle(w).any { it in RISKY_WORDS } }
 
 /**
  * Why [act] may not run, or null when it may: "off" (the switch), "locked" (keyguard), "not here"
  * (press/type/scroll act inside the app in front: it must be known, and not on the never list, Maya
- * herself, or do-not-watch). System kinds work from anywhere, whatever [pkg] is.
+ * herself, or do-not-watch; a blank [pkg] counts as unknown). System kinds work from anywhere,
+ * whatever [pkg] is.
+ *
+ * For the runner: pass the package of the accessibility root window (the app the nodes belong to),
+ * not the last foreground event; and check again just before the click.
  */
 fun blockedReason(
     act: Act,
@@ -56,7 +78,7 @@ fun blockedReason(
     if (!allowActions) return "off"
     if (keyguardLocked) return "locked"
     if (act.kind !in PHONE_KINDS) return null
-    if (pkg == null) return "not here"
+    if (pkg.isNullOrBlank()) return "not here"
     return if (pkg in NEVER_PACKAGES || pkg == ownPackage || doNotWatch(pkg)) "not here" else null
 }
 
