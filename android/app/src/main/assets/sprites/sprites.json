@@ -3,12 +3,12 @@
   "image": "maya_sprites.png",
   "format": "RGBA8888",
   "width": 512,
-  "height": 768,
+  "height": 1344,
   "frameWidth": 64,
   "frameHeight": 64,
   "columns": 8,
-  "rows": 12,
-  "frameCount": 43,
+  "rows": 21,
+  "frameCount": 72,
   "facing": "right",
   "mirrorForLeft": true,
   "scaleMode": "nearest",
@@ -413,6 +413,270 @@
         }
       ],
       "totalDurationMs": 1000
+    },
+    "jump": {
+      "row": 12,
+      "frames": 4,
+      "fps": 8,
+      "loop": false,
+      "onComplete": "hold",
+      "cells": [
+        {
+          "x": 0,
+          "y": 768,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 768,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 128,
+          "y": 768,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 192,
+          "y": 768,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 500
+    },
+    "fall": {
+      "row": 13,
+      "frames": 2,
+      "fps": 6,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 832,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 832,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 333.333
+    },
+    "perch": {
+      "row": 14,
+      "frames": 2,
+      "fps": 2,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 896,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 896,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 1000
+    },
+    "poke": {
+      "row": 15,
+      "frames": 4,
+      "fps": 6,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 960,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 960,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 128,
+          "y": 960,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 192,
+          "y": 960,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 666.667
+    },
+    "tease": {
+      "row": 16,
+      "frames": 4,
+      "fps": 6,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 1024,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 1024,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 128,
+          "y": 1024,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 192,
+          "y": 1024,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 666.667
+    },
+    "look": {
+      "row": 17,
+      "frames": 4,
+      "fps": 4,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 1088,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 1088,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 128,
+          "y": 1088,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 192,
+          "y": 1088,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 1000
+    },
+    "ask": {
+      "row": 18,
+      "frames": 3,
+      "fps": 4,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 1152,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 1152,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 128,
+          "y": 1152,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 750
+    },
+    "type": {
+      "row": 19,
+      "frames": 4,
+      "fps": 8,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 1216,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 1216,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 128,
+          "y": 1216,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 192,
+          "y": 1216,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 500
+    },
+    "held": {
+      "row": 20,
+      "frames": 2,
+      "fps": 4,
+      "loop": true,
+      "onComplete": "repeat",
+      "cells": [
+        {
+          "x": 0,
+          "y": 1280,
+          "w": 64,
+          "h": 64
+        },
+        {
+          "x": 64,
+          "y": 1280,
+          "w": 64,
+          "h": 64
+        }
+      ],
+      "totalDurationMs": 500
     }
   }
 }
