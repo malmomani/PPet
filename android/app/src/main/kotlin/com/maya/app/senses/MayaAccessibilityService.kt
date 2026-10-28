@@ -306,8 +306,21 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
         }
     } ?: Clicked(HandResult.NOT_FOUND, null)
 
-    override fun tap(x: Int, y: Int, onDone: (Boolean) -> Unit): Boolean {
-        if (ScreenBridge.sink == null) return false
+    override fun tap(target: String, allow: (String?, PressNode) -> Boolean, onDone: (Boolean) -> Unit): HandResult = withLiveTree { pass ->
+        val n = matchButton(pass, target)
+        val press = n?.let { pressNodeOf(pass, it) }
+        val b = press?.node?.bounds
+        when {
+            !pass.readable -> HandResult.REFUSED
+            press == null || b == null -> HandResult.NOT_FOUND
+            !allow(pass.pkg, press) -> HandResult.REFUSED
+            dispatchTap(b.centerX, (b.top + b.bottom) / 2, onDone) -> HandResult.DONE
+            else -> HandResult.FAILED
+        }
+    } ?: HandResult.NOT_FOUND
+
+    /** A tap gesture at ([x], [y]) in screen pixels; false if it could not be sent. */
+    private fun dispatchTap(x: Int, y: Int, onDone: (Boolean) -> Unit): Boolean {
         val path = Path()
         path.moveTo(x.toFloat(), y.toFloat())
         val gesture = GestureDescription.Builder()
@@ -326,7 +339,7 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
         }
     }
 
-    override fun findField(into: String?): UiNode? = withLiveTree { pass -> fieldOf(pass, into)?.ui }
+    override fun findField(into: String?): FieldNode? = withLiveTree { pass -> fieldOf(pass, into)?.let { FieldNode(it.ui, pass.pkg) } }
 
     override fun setText(into: String?, text: String, allow: (String?, UiNode) -> Boolean): HandResult = withLiveTree { pass ->
         val f = fieldOf(pass, into)
@@ -438,8 +451,12 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
         return pass.nodes.getOrNull(ui.indexOfFirst { it === m })
     }
 
-    private fun pressNodeOf(pass: LivePass, n: LiveNode): PressNode? =
-        pass.nodes.getOrNull(n.clickIdx)?.let { PressNode(n.ui, it.ui) }
+    /** [n] as a press: its click target and every node whose click goes there (same [LiveNode.clickIdx]). */
+    private fun pressNodeOf(pass: LivePass, n: LiveNode): PressNode? {
+        val clickable = pass.nodes.getOrNull(n.clickIdx) ?: return null
+        val subtree = pass.nodes.filter { it.clickIdx == n.clickIdx }.map { it.ui }
+        return PressNode(n.ui, clickable.ui, subtree, pass.pkg)
+    }
 
     /** The focused text field, else the one whose hint or description matches [into]; never a password field. */
     private fun fieldOf(pass: LivePass, into: String?): LiveNode? {

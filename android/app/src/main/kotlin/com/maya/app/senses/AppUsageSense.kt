@@ -92,6 +92,18 @@ class AppUsageSense(
      */
     fun foregroundPackage(): String? = foreground?.takeIf { it != ownPackage }
 
+    /**
+     * The foreground package read now (not as of the last poll): the last app resumed in the last
+     * 10 s, else the last poll's. Null when unknown (no usage access, screen off) or Maya's own.
+     * For checking that an app Maya just started really came to the front.
+     */
+    fun foregroundNow(): String? {
+        if (!started || !screenOn) return null
+        val now = System.currentTimeMillis()
+        val latest = latestResumed(maxOf(now - WINDOW_MS, ignoreBefore), now) ?: foreground
+        return latest?.takeIf { it != ownPackage }
+    }
+
     /** The app Maya currently sees in the foreground (package, label), if any. */
     fun currentApp(): Pair<String, String>? {
         val pkg = tracker.current() ?: return null

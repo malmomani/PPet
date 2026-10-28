@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.AlarmClock
 import android.util.Log
@@ -30,6 +31,7 @@ import com.maya.core.UiNode
 import com.maya.core.blockedReason
 import com.maya.core.isRisky
 import com.maya.core.matchApp
+import kotlin.math.abs
 
 /** What the action runner needs from her body (OverlayBody). Main thread only. */
 interface ActionBody {
@@ -48,11 +50,11 @@ interface ActionBody {
 
     /**
      * She walks to [box] and pokes it (core `commandPress`); [onResult] is called once: true when
-     * her poke starts, false when she can't get there. Where she can't walk now (keyboard open, a
-     * call, a button below her floor) she pokes where she stands. False when she isn't on screen;
-     * then it is never called.
+     * her poke starts, false when she can't get there, null when she went away (hidden, screen
+     * off). Where she can't walk now (keyboard open, a call, a button below her floor) she pokes
+     * where she stands. False when she isn't on screen; then it is never called.
      */
-    fun press(box: Box, onResult: (Boolean) -> Unit): Boolean
+    fun press(box: Box, onResult: (Boolean?) -> Unit): Boolean
 
     /** Forgets the press under way, if any, without calling its callback. */
     fun cancelPress()
@@ -67,11 +69,15 @@ interface ActionBody {
 /**
  * Runs the brain's `act` actions (spec §5.3), one at a time, and answers every one with exactly one
  * [ActResult]: done, declined (✖), timeout (no answer in 15 s), failed or blocked. Checks first
- * (core [blockedReason] on the live active window, the keyguard and "Let Maya use my phone"),
- * resolves the target on screen, asks before anything risky (core [isRisky]), then acts: system
- * kinds through Android APIs, press/type/scroll through the accessibility service ([hands]),
- * checking again in the same pass as the click or the typing. A press walks her body to the
- * button first ([body]). Never logs what is typed, searched or read on screen. Main thread only.
+ * (core [blockedReason] on the live active window, the keyguard and "Let Maya use my phone", and
+ * nothing at all while a do-not-watch app is in front: [awayHere]), resolves the target on screen,
+ * asks before anything risky (core [isRisky] over everything the click would press), then acts:
+ * system kinds through Android APIs, press/type/scroll through the accessibility service
+ * ([hands]), checking again in the same pass as the click or the typing. A yes is bound to what
+ * was asked about: if the button or field found afterwards is not the same one, it fails
+ * ("screen changed"). A press walks her body to the button first ([body]). An app she starts
+ * must be in front 1.5 s later ([frontApp]). Never logs what is typed, searched or read on screen.
+ * Main thread only.
  */
 class ActionRunner(
     private val context: Context,
@@ -80,13 +86,34 @@ class ActionRunner(
     private val body: () -> ActionBody?,
     private val hands: () -> PhoneHands?,
     private val doNotWatch: (String) -> Boolean,
+    /** True while she stepped away from a do-not-watch app, or one is in front: she does nothing. */
+    private val awayHere: () -> Boolean,
+    /** The app in front now (screen sense, else usage access), or null when neither can tell. */
+    private val frontApp: () -> String?,
 ) {
+    /** What the user said yes to pressing: [label] of the matched node, the click target's id and bounds. */
+    private data class ButtonSig(val pkg: String?, val viewId: String?, val label: String?, val bounds: Box)
+
+    /** What the user said yes to typing into: the app and the field's id (else its hint). */
+    private data class FieldSig(val pkg: String?, val id: String?)
+
+    /** A system kind: why it failed (null: it started), and the package it started, to check it came to the front. */
+    private class Outcome(val failure: String?, val launched: String? = null)
+
     private class Job(val act: Act) {
         val startMs: Long = SystemClock.uptimeMillis()
-        /** The user said yes: risk is no longer asked about. */
+        /** The user said yes: the button or field must still be [button] / [field]. */
         var confirmed = false
+        var button: ButtonSig? = null
+        var field: FieldSig? = null
         /** Her wall-clock cap; longer once she asks. */
         var capMs = CAP_MS
+    }
+
+    /** What an `allow` check on a button decided: refused (and why), or the button is not the one asked about. */
+    private class Check {
+        var refused: Pair<String, String>? = null
+        var changed = false
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -119,10 +146,10 @@ class ActionRunner(
         if (refused != null) return finish(j, refused.first, refused.second)
         when (act.kind) {
             "open_app" -> system(j) { openApp(act.app.orEmpty()) }
-            "media" -> system(j) { media(act.key) }
-            "volume" -> system(j) { volume(act.dir) }
-            "timer" -> system(j) { timer(act.seconds ?: 0, act.label) }
-            "alarm" -> system(j) { alarm(act.hour ?: 0, act.minute ?: 0, act.label) }
+            "media" -> system(j) { Outcome(media(act.key)) }
+            "volume" -> system(j) { Outcome(volume(act.dir)) }
+            "timer" -> system(j) { Outcome(timer(act.seconds ?: 0, act.label)) }
+            "alarm" -> system(j) { Outcome(alarm(act.hour ?: 0, act.minute ?: 0, act.label)) }
             "web_search" -> system(j) { webSearch(act.query.orEmpty()) }
             "scroll" -> scroll(j)
             "press" -> press(j)
@@ -132,23 +159,41 @@ class ActionRunner(
     }
 
     /**
-     * Why [act] may not run in the active window of [pkg] (status to detail), or null. Phone kinds
-     * need the accessibility service (Screen access and "Let Maya read my screen").
+     * Why [act] may not run in the active window of [pkg] (status to detail), or null. Nothing runs
+     * while a do-not-watch app is in front; phone kinds need the accessibility service (Screen
+     * access and "Let Maya read my screen").
      */
     private fun refusal(act: Act, pkg: String?): Pair<String, String>? {
         val reason = blockedReason(act, pkg, context.packageName, doNotWatch, keyguardLocked(), prefs.allowActions)
         if (reason == "off" || reason == "locked") return BLOCKED to reason
+        if (awayHere()) return BLOCKED to "not here"
         if (act.kind in SCREEN_KINDS && hands() == null) return FAILED to "no screen access"
         return reason?.let { BLOCKED to it }
     }
 
-    private fun keyguardLocked(): Boolean =
-        context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked ?: true
+    /** Locked, or the screen is off (nobody can see her ask). */
+    private fun keyguardLocked(): Boolean {
+        val locked = context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked ?: true
+        val interactive = context.getSystemService(PowerManager::class.java)?.isInteractive ?: false
+        return locked || !interactive
+    }
 
-    /** A system kind: done, or the failure [action] reports. */
-    private fun system(j: Job, action: () -> String?) {
-        val failure = action()
-        if (failure == null) finish(j, DONE, null) else finish(j, FAILED, failure)
+    /**
+     * A system kind: failed, or done; an app it started must be in front [LAUNCH_CHECK_MS] later
+     * (else Android blocked the start), when the front app can be told.
+     */
+    private fun system(j: Job, action: () -> Outcome) {
+        val out = action()
+        val failure = out.failure
+        val launched = out.launched
+        when {
+            failure != null -> finish(j, FAILED, failure)
+            launched == null -> finish(j, DONE, null)
+            else -> later(j, LAUNCH_CHECK_MS) {
+                val front = frontApp()
+                if (front == null || front == launched) finish(j, DONE, null) else finish(j, FAILED, "android blocked it")
+            }
+        }
     }
 
     private fun scroll(j: Job) {
@@ -167,20 +212,31 @@ class ActionRunner(
     }
 
     /**
-     * press: find the button; risky → ask first (and start over after a yes); her body walks to it
-     * and pokes it; then it is found again, checked again and clicked (a tap gesture at its centre
-     * when it won't take a click).
+     * press: find the button; risky → ask first, binding the yes to that button, and start over
+     * after a yes (the button found then must be the same one); her body walks to it and pokes it;
+     * then it is found again, checked again and clicked (a tap gesture at its centre when it won't
+     * take a click).
      */
     private fun press(j: Job) {
         val h = hands() ?: return finish(j, FAILED, "no screen access")
         val target = j.act.target.orEmpty()
         val found = h.findButton(target) ?: return finish(j, FAILED, "not on screen")
-        if (!j.confirmed && risky(j.act, found)) return ask(j, pressQuestion(found, target)) { press(j) }
+        if (j.confirmed) {
+            val sig = j.button
+            if (sig == null || !matches(sig, found)) return finish(j, FAILED, "screen changed")
+        } else if (risky(j.act, found)) {
+            j.button = sigOf(found)
+            return ask(j, pressQuestion(j.act, found)) { press(j) }
+        }
         val b = body()
         if (b == null || !b.isShowing) return finish(j, FAILED, "hidden")
         val walking = b.press(found.node.bounds) { reached ->
             callback(j) {
-                if (reached) later(j, POKE_LEAD_MS) { click(j) } else finish(j, FAILED, "not on screen")
+                when (reached) {
+                    true -> later(j, POKE_LEAD_MS) { click(j) }
+                    false -> finish(j, FAILED, "not on screen")
+                    null -> finish(j, FAILED, "hidden")
+                }
             }
         }
         if (!walking) finish(j, FAILED, "hidden")
@@ -188,48 +244,68 @@ class ActionRunner(
 
     private fun click(j: Job) {
         val h = hands() ?: return finish(j, FAILED, "no screen access")
-        var refused: Pair<String, String>? = null
-        var needsYes = false
-        val clicked: Clicked = h.click(j.act.target.orEmpty()) { pkg, node ->
-            refused = refusal(j.act, pkg)
-            // the screen moved while she walked: a button that is risky now still needs a yes
-            needsYes = refused == null && !j.confirmed && risky(j.act, node)
-            refused == null && !needsYes
-        }
+        val check = Check()
+        val clicked: Clicked = h.click(j.act.target.orEmpty()) { pkg, node -> allowPress(j, check, pkg, node, null) }
         val node = clicked.target
         when (clicked.result) {
             HandResult.DONE -> finish(j, DONE, null)
             HandResult.NOT_FOUND -> finish(j, FAILED, "not on screen")
-            HandResult.REFUSED -> if (needsYes && node != null) {
-                ask(j, pressQuestion(node, j.act.target.orEmpty())) { press(j) }
-            } else {
-                refuse(j, refused)
-            }
-            HandResult.FAILED -> if (node != null) tapFallback(j, h, node.node.bounds) else finish(j, FAILED, "couldn't press it")
+            HandResult.REFUSED -> pressRefused(j, check)
+            HandResult.FAILED -> if (node != null) tapFallback(j, h, node.clickable.bounds) else finish(j, FAILED, "couldn't press it")
         }
     }
 
-    /** The button won't take ACTION_CLICK: a tap gesture at its centre, with touches passing through her. */
-    private fun tapFallback(j: Job, h: PhoneHands, box: Box) {
+    /**
+     * The button won't take ACTION_CLICK: with touches passing through her, a tap gesture at its
+     * centre, found and checked again in the same pass (it must not have moved from [near]).
+     */
+    private fun tapFallback(j: Job, h: PhoneHands, near: Box) {
         body()?.letTouchesThrough(PASS_THROUGH_MS)
         later(j, PASS_THROUGH_LEAD_MS) {
-            // checked again: the tap goes to whatever is under that point now
-            val again = refusal(j.act, h.activePackage())
-            if (again != null) return@later finish(j, again.first, again.second)
-            val sent = h.tap(box.centerX, (box.top + box.bottom) / 2) { ok ->
+            val check = Check()
+            val result = h.tap(j.act.target.orEmpty(), { pkg, node -> allowPress(j, check, pkg, node, near) }) { ok ->
                 callback(j) { if (ok) finish(j, DONE, null) else finish(j, FAILED, "couldn't press it") }
             }
-            if (!sent) finish(j, FAILED, "couldn't press it")
+            when (result) {
+                HandResult.DONE -> Unit // the gesture's callback finishes it
+                HandResult.NOT_FOUND -> finish(j, FAILED, "not on screen")
+                HandResult.REFUSED -> pressRefused(j, check)
+                HandResult.FAILED -> finish(j, FAILED, "couldn't press it")
+            }
         }
     }
 
-    /** type: find the field; always ask first; then the `type` pose, checked again, and the text set. */
+    /**
+     * The check in the same pass as a click or a tap: allowed here, and the button is the one the
+     * user said yes to (or, without a yes, still not risky), and (for a tap) still near [near].
+     */
+    private fun allowPress(j: Job, check: Check, pkg: String?, node: PressNode, near: Box?): Boolean {
+        val refused = refusal(j.act, pkg)
+        check.refused = refused
+        if (refused != null) return false
+        val sig = j.button
+        val same = if (j.confirmed) sig != null && pkg == sig.pkg && matches(sig, node) else !risky(j.act, node)
+        check.changed = !same || (near != null && !close(near, node.clickable.bounds))
+        return !check.changed
+    }
+
+    private fun pressRefused(j: Job, check: Check) {
+        if (check.changed) finish(j, FAILED, "screen changed") else refuse(j, check.refused)
+    }
+
+    /**
+     * type: find the field; always ask first, binding the yes to that field; after a yes the field
+     * found must be the same one; then the `type` pose, checked again, and the text set.
+     */
     private fun type(j: Job) {
         val h = hands() ?: return finish(j, FAILED, "no screen access")
         val into = j.act.into
         val text = j.act.text.orEmpty()
         val field = h.findField(into) ?: return finish(j, FAILED, "no text field")
-        if (!j.confirmed && isRisky(j.act, field)) {
+        if (j.confirmed) {
+            if (j.field != fieldSigOf(field.pkg, field.node)) return finish(j, FAILED, "screen changed")
+        } else if (isRisky(j.act, field.node)) {
+            j.field = fieldSigOf(field.pkg, field.node)
             return ask(j, context.getString(R.string.ask_type) + "\n“" + preview(text, TYPE_PREVIEW_MAX) + "”") { type(j) }
         }
         val b = body()
@@ -237,15 +313,18 @@ class ActionRunner(
         b.setActPose("type")
         later(j, TYPE_POSE_MS) {
             b.setActPose(null)
+            if (!b.isShowing) return@later finish(j, FAILED, "hidden")
             var refused: Pair<String, String>? = null
-            val result = h.setText(into, text) { pkg, _ ->
+            var changed = false
+            val result = h.setText(into, text) { pkg, node ->
                 refused = refusal(j.act, pkg)
-                refused == null
+                changed = refused == null && j.confirmed && j.field != fieldSigOf(pkg, node)
+                refused == null && !changed
             }
             when (result) {
                 HandResult.DONE -> finish(j, DONE, null)
                 HandResult.NOT_FOUND -> finish(j, FAILED, "no text field")
-                HandResult.REFUSED -> refuse(j, refused)
+                HandResult.REFUSED -> if (changed) finish(j, FAILED, "screen changed") else refuse(j, refused)
                 HandResult.FAILED -> finish(j, FAILED, "couldn't type")
             }
         }
@@ -326,12 +405,33 @@ class ActionRunner(
         finish(j, r.first, r.second)
     }
 
-    /** "Can I press {label}?" with the button's own label (at most 30 chars), else the target. */
-    private fun pressQuestion(found: PressNode, target: String): String =
-        context.getString(R.string.ask_press, clip(labelOf(found.node) ?: target, PRESS_LABEL_MAX))
+    /**
+     * "Can I press {label}?" naming what makes it risky: the label of the first risky node the click
+     * would press (the matched node first), else the matched node's, else the target; at most 30 chars.
+     */
+    private fun pressQuestion(act: Act, found: PressNode): String {
+        val riskyLabel = (listOf(found.node) + found.subtree).firstOrNull { isRisky(act, it) && labelOf(it) != null }
+        val label = riskyLabel?.let { labelOf(it) } ?: labelOf(found.node) ?: act.target.orEmpty()
+        return context.getString(R.string.ask_press, clip(label, PRESS_LABEL_MAX))
+    }
 
-    /** A press is risky when the button or the node its click goes to is (core [isRisky]). */
-    private fun risky(act: Act, found: PressNode): Boolean = isRisky(act, found.node) || isRisky(act, found.clickable)
+    /** A press is risky when anything its click presses is (core [isRisky]): the button and every node inside it. */
+    private fun risky(act: Act, found: PressNode): Boolean =
+        isRisky(act, found.node) || isRisky(act, found.clickable) || found.subtree.any { isRisky(act, it) }
+
+    private fun sigOf(found: PressNode) = ButtonSig(found.pkg, found.clickable.viewId, labelOf(found.node), found.clickable.bounds)
+
+    /** [found] is the button [sig] describes: same app, click target id and label, about the same place. */
+    private fun matches(sig: ButtonSig, found: PressNode): Boolean =
+        found.pkg == sig.pkg && found.clickable.viewId == sig.viewId && labelOf(found.node) == sig.label &&
+            close(sig.bounds, found.clickable.bounds)
+
+    /** Every edge within [SAME_PLACE_PX]. */
+    private fun close(a: Box, b: Box): Boolean =
+        abs(a.left - b.left) <= SAME_PLACE_PX && abs(a.top - b.top) <= SAME_PLACE_PX &&
+            abs(a.right - b.right) <= SAME_PLACE_PX && abs(a.bottom - b.bottom) <= SAME_PLACE_PX
+
+    private fun fieldSigOf(pkg: String?, field: UiNode) = FieldSig(pkg, field.viewId ?: field.description)
 
     /** What a button says: its text (not a field's: that is what the user typed), else its description. */
     private fun labelOf(n: UiNode): String? =
@@ -339,15 +439,15 @@ class ActionRunner(
 
     // ---- system kinds (null: done; else why it failed) ----
 
-    private fun openApp(name: String): String? {
+    private fun openApp(name: String): Outcome {
         val pm = context.packageManager
         val apps = launcherActivities(pm).mapNotNull { ri ->
             val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
             if (pkg == context.packageName) null else ri.loadLabel(pm).toString() to pkg
         }
-        val pkg = matchApp(name, apps) ?: return "no such app"
-        val intent = pm.getLaunchIntentForPackage(pkg) ?: return "no such app"
-        return startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val pkg = matchApp(name, apps) ?: return Outcome("no such app")
+        val intent = pm.getLaunchIntentForPackage(pkg) ?: return Outcome("no such app")
+        return Outcome(startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)), pkg)
     }
 
     private fun launcherActivities(pm: PackageManager): List<ResolveInfo> {
@@ -414,13 +514,15 @@ class ActionRunner(
     }
 
     /** The phone's web search; without one, Google in the browser. */
-    private fun webSearch(query: String): String? {
+    private fun webSearch(query: String): Outcome {
         val pm = context.packageManager
         val search = Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, query)
-        if (search.resolveActivity(pm) != null) return startActivity(search.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         val view = Intent(Intent.ACTION_VIEW, Uri.parse(GOOGLE_SEARCH + Uri.encode(query)))
-        if (view.resolveActivity(pm) == null) return "no browser"
-        return startActivity(view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val intent = if (search.resolveActivity(pm) != null) search else view
+        val handler = intent.resolveActivity(pm) ?: return Outcome("no browser")
+        // A chooser ("android") can't be checked: the app picked from it is unknown.
+        val launched = handler.packageName.takeIf { it != ANDROID_PACKAGE }
+        return Outcome(startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)), launched)
     }
 
     /**
@@ -463,6 +565,11 @@ class ActionRunner(
         private const val PRESS_LABEL_MAX = 30
         private const val TYPE_PREVIEW_MAX = 60
         private const val GOOGLE_SEARCH = "https://www.google.com/search?q="
+        private const val ANDROID_PACKAGE = "android"
+        /** A started app must be in front this long after the start, else Android blocked it. */
+        private const val LAUNCH_CHECK_MS = 1500L
+        /** A button is still the one asked about when every edge moved at most this far. */
+        private const val SAME_PLACE_PX = 48
 
         /** [s] trimmed to at most [max] chars ("…" included when cut), never splitting a surrogate pair. */
         internal fun clip(s: String, max: Int): String {

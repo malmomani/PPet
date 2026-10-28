@@ -230,6 +230,8 @@ class MayaService : Service() {
             // press/type/scroll need Screen access and "Let Maya read my screen"
             hands = { if (screenSink != null) ScreenBridge.hands else null },
             doNotWatch = { pkg -> doNotWatch.isBlocked(pkg) },
+            awayHere = ::awayHere,
+            frontApp = { screenSource()?.frontApp() ?: appUsage?.foregroundNow() },
         )
         val conn = BrainConnection(url, prefs.voiceMode, ::onAction, ::onConnected, ::onAuthError, ::screenSize)
         connection = conn
@@ -327,6 +329,17 @@ class MayaService : Service() {
         if (away == autoHidden) return
         autoHidden = away
         applyVisibility()
+    }
+
+    /**
+     * She does nothing on the phone now: she stepped away from a do-not-watch app, or one is in
+     * front (or anywhere on screen) by the screen sense or by usage access.
+     */
+    private fun awayHere(): Boolean {
+        if (autoHidden) return true
+        val source = screenSource()
+        if (source?.blockedAppVisible() == true) return true
+        return listOfNotNull(source?.frontApp(), appUsage?.foregroundNow()).any { doNotWatch.isBlocked(it) }
     }
 
     /** The accessibility service, while the screen sense is on. */

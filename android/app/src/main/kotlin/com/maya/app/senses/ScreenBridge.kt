@@ -54,11 +54,16 @@ interface GlanceSource {
 }
 
 /**
- * A button found for a press in the active window: [node] is the node the target matched (a label
- * inside a button counts), [clickable] the node a click goes to ([node] itself or its nearest
- * clickable ancestor). Both are fresh from the live tree.
+ * A button found for a press in the active window [pkg]: [node] is the node the target matched (a
+ * label inside a button counts), [clickable] the node a click goes to ([node] itself when it is
+ * clickable, else its nearest clickable ancestor), and [subtree] every node whose click goes to
+ * [clickable] ([clickable] and [node] included): what the click really presses, for the risk
+ * check. All fresh from the same pass over the live tree.
  */
-data class PressNode(val node: UiNode, val clickable: UiNode)
+data class PressNode(val node: UiNode, val clickable: UiNode, val subtree: List<UiNode>, val pkg: String?)
+
+/** A text field found for typing in the active window [pkg] (never a password field). */
+data class FieldNode(val node: UiNode, val pkg: String?)
 
 /** How a [PhoneHands] call ended. */
 enum class HandResult {
@@ -94,18 +99,24 @@ interface PhoneHands {
 
     /**
      * Finds [target] again and, when [allow] accepts the active window's package and the button,
-     * clicks it: `ACTION_CLICK` on its clickable node, then on the clickable ancestors above that.
+     * clicks it: one `ACTION_CLICK` on [PressNode.clickable] (the node itself when clickable, else
+     * its nearest clickable ancestor; never further up).
      */
     fun click(target: String, allow: (String?, PressNode) -> Boolean): Clicked
 
-    /** A tap gesture at ([x], [y]) in screen pixels; [onDone] gets whether it completed. False if it could not be sent. */
-    fun tap(x: Int, y: Int, onDone: (Boolean) -> Unit): Boolean
+    /**
+     * The fallback for a button that won't take a click: finds [target] again in one pass and, when
+     * [allow] accepts it (the caller compares its bounds too), dispatches a tap gesture at the
+     * centre of the matched node. DONE means the tap was sent; [onDone] then gets whether it
+     * completed (only called after DONE).
+     */
+    fun tap(target: String, allow: (String?, PressNode) -> Boolean, onDone: (Boolean) -> Unit): HandResult
 
     /**
      * The text field to type into: the focused editable field, else the editable field whose hint
      * or description matches [into]. Never a password field.
      */
-    fun findField(into: String?): UiNode?
+    fun findField(into: String?): FieldNode?
 
     /** Finds the field again ([findField]) and, when [allow] accepts, sets its text to [text] (ACTION_SET_TEXT). */
     fun setText(into: String?, text: String, allow: (String?, UiNode) -> Boolean): HandResult

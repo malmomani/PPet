@@ -159,7 +159,7 @@ class OverlayBody(
     /** The runner's callback for the question in her bubble; null when not asking. */
     private var confirmAnswer: ((Boolean?) -> Unit)? = null
     /** The runner's callback for the press she is walking to; null when none. */
-    private var pressResult: ((Boolean) -> Unit)? = null
+    private var pressResult: ((Boolean?) -> Unit)? = null
     /** A pose the runner holds (e.g. `type`). */
     private var actPose: String? = null
     /** She holds the `poke` pose (her press lands) until [endPoke]. */
@@ -345,7 +345,7 @@ class OverlayBody(
         endConfirm()
     }
 
-    override fun press(box: Box, onResult: (Boolean) -> Unit): Boolean {
+    override fun press(box: Box, onResult: (Boolean?) -> Unit): Boolean {
         if (!visible || destroyed || !looping) return false
         pressResult = null
         if (restricted || box.top >= floorY()) {
@@ -426,18 +426,18 @@ class OverlayBody(
         updatePose()
     }
 
-    /** She went away (hidden, screen off): a question is withdrawn and a press is lost. */
+    /** She went away (hidden, screen off): a question is withdrawn and a press is lost (as "she went away"). */
     private fun dropActions() {
         answerConfirm(null)
-        losePress()
+        losePress(null)
     }
 
-    /** The press under way (if any) can't happen: the runner hears so. */
-    private fun losePress() {
+    /** The press under way (if any) can't happen: the runner hears false (lost) or null (she went away). */
+    private fun losePress(why: Boolean?) {
         val callback = pressResult ?: return
         pressResult = null
         updatePose()
-        callback(false)
+        callback(why)
     }
 
     // ---- lifecycle ----
@@ -906,7 +906,7 @@ class OverlayBody(
         val oldY = params.y
         screenW = w
         screenH = h
-        losePress() // the old body's press can't finish
+        losePress(false) // the old body's press can't finish
         behavior = newBehavior()
         behavior.dragEnd(oldX.coerceIn(0, maxX()).toFloat(), oldY.coerceIn(0, maxY()).toFloat())
         if (held()) behavior.dragStart()

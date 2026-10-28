@@ -5,11 +5,13 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.hypot
 
 /**
  * Maya's speech bubble: its own small overlay window (not focusable, not touchable) that sits above
@@ -75,6 +77,11 @@ class BubbleView(context: Context, private val wm: WindowManager) {
     // The question being asked (both null when not asking).
     private var onYes: (() -> Unit)? = null
     private var onNo: (() -> Unit)? = null
+    /** ✔ / ✖ ignore taps until this uptime: just after the question appears or the bubble moved. */
+    private var armedAtMs = 0L
+    /** Where the bubble was when the buttons were last (re)armed. */
+    private var armX = 0
+    private var armY = 0
 
     val isShowing: Boolean get() = attached
 
@@ -111,6 +118,7 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         params.flags = ASKING_FLAGS
         params.alpha = 1f // nothing passes through it while it takes touches
         showContent(text)
+        rearm()
     }
 
     /** Withdraws the question (if any) and closes the bubble; neither answer is called. */
@@ -143,6 +151,8 @@ class BubbleView(context: Context, private val wm: WindowManager) {
     fun destroy() = hide()
 
     private fun answer(yes: Boolean) {
+        // A tap meant for the app (the bubble just appeared or moved under the finger) is no answer.
+        if (SystemClock.uptimeMillis() < armedAtMs) return
         val callback = (if (yes) onYes else onNo) ?: return
         hide() // ends the question first, so the callback is called once
         callback()
@@ -201,7 +211,15 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         if (x == params.x && y == params.y) return false
         params.x = x
         params.y = y
+        if (isAsking && hypot((x - armX).toFloat(), (y - armY).toFloat()) > MOVE_REARM_PX) rearm()
         return true
+    }
+
+    /** ✔ / ✖ take taps again only [ARM_MS] from now, at the bubble's current place. */
+    private fun rearm() {
+        armedAtMs = SystemClock.uptimeMillis() + ARM_MS
+        armX = params.x
+        armY = params.y
     }
 
     /** A big round-ish tap target for ✔ or ✖. */
@@ -214,6 +232,8 @@ class BubbleView(context: Context, private val wm: WindowManager) {
             minWidth = dp(BUTTON_DP)
             minHeight = dp(BUTTON_DP)
             isClickable = true
+            // no answer through another app's window drawn over the bubble (tapjacking)
+            filterTouchesWhenObscured = true
             setOnClickListener { onTap() }
         }
 
@@ -227,6 +247,10 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         const val MAX_WIDTH_FRACTION = 0.7f
         const val MAX_PASS_THROUGH_ALPHA = 0.8f
         const val BUTTON_DP = 48
+        /** ✔ / ✖ ignore taps this long after the question appears or the bubble moves. */
+        const val ARM_MS = 500L
+        /** Moving more than this many px re-arms the buttons. */
+        const val MOVE_REARM_PX = 8f
         const val TEXT_COLOR = 0xFF222222.toInt()
         const val BORDER_COLOR = 0xFFCCCCCC.toInt()
         const val YES_COLOR = 0xFF2E7D32.toInt()
