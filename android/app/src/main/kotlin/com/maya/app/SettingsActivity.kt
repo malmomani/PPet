@@ -41,7 +41,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Onboarding + settings: brain address/token, permission checklist, Maya's voice, messages,
- * do-not-watch list, start/stop.
+ * screen, using the phone, do-not-watch list, start/stop.
  */
 class SettingsActivity : Activity() {
     private class PermissionRow(
@@ -168,6 +168,16 @@ class SettingsActivity : Activity() {
         readScreen.setOnCheckedChangeListener { _, checked -> onReadScreenChanged(checked) }
         root.addView(readScreen, matchWrap(top = 4))
         root.addView(text(getString(R.string.read_screen_note), 14f), matchWrap(top = 2))
+
+        // Actions (off by default; read live by the action runner, so no restart)
+        root.addView(text(getString(R.string.section_actions), 18f, bold = true), matchWrap(top = 20))
+        val allowActions = Switch(this)
+        allowActions.setText(R.string.allow_actions)
+        allowActions.textSize = 16f
+        allowActions.isChecked = prefs.allowActions
+        allowActions.setOnCheckedChangeListener { _, checked -> prefs.allowActions = checked }
+        root.addView(allowActions, matchWrap(top = 4))
+        root.addView(text(getString(R.string.allow_actions_note), 14f), matchWrap(top = 2))
 
         // Do-not-watch list
         root.addView(text(getString(R.string.section_do_not_watch), 18f, bold = true), matchWrap(top = 20))

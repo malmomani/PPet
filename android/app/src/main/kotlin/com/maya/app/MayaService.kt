@@ -21,6 +21,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
+import com.maya.app.actions.ActionRunner
 import com.maya.app.overlay.OverlayBody
 import com.maya.app.senses.AppUsageSense
 import com.maya.app.senses.DeviceSense
@@ -29,6 +30,7 @@ import com.maya.app.senses.ScreenBridge
 import com.maya.app.senses.ScreenSink
 import com.maya.app.senses.realScreenSize
 import com.maya.app.voice.VoicePlayer
+import com.maya.core.Act
 import com.maya.core.Action
 import com.maya.core.AppOpened
 import com.maya.core.Audio
@@ -95,6 +97,8 @@ class MayaService : Service() {
     /** Our [NotificationBridge.sink] (it owns this run's NotificationFilter); null while the sense is off. */
     private var notificationSink: ((NotificationInfo) -> Unit)? = null
     private var voicePlayer: VoicePlayer? = null
+    /** Runs the brain's `act` actions ("Let Maya use my phone"; it checks the switch itself). */
+    private var actions: ActionRunner? = null
     private var running = false
     private var status = Status.NAPPING
     /** The user hid Maya with the notification's Hide action. */
@@ -174,6 +178,8 @@ class MayaService : Service() {
 
     override fun onDestroy() {
         running = false
+        actions?.cancel("stopped")
+        actions = null
         dropShot()
         stopNetworkWatch()
         overlayBody?.destroy()
@@ -215,6 +221,15 @@ class MayaService : Service() {
             this,
             onStarted = { overlay?.onVoiceStarted() },
             onEnded = { overlay?.onVoiceEnded() },
+        )
+        actions = ActionRunner(
+            this,
+            prefs,
+            ::emit,
+            body = { overlayBody },
+            // press/type/scroll need Screen access and "Let Maya read my screen"
+            hands = { if (screenSink != null) ScreenBridge.hands else null },
+            doNotWatch = { pkg -> doNotWatch.isBlocked(pkg) },
         )
         val conn = BrainConnection(url, prefs.voiceMode, ::onAction, ::onConnected, ::onAuthError, ::screenSize)
         connection = conn
@@ -664,6 +679,7 @@ class MayaService : Service() {
                 else -> voicePlayer?.play(a.refId, a.dataB64)
             }
             is Look -> onLook()
+            is Act -> actions?.run(a)
             else -> Unit
         }
         overlay?.handle(a)
@@ -677,6 +693,8 @@ class MayaService : Service() {
         if (on) {
             reemitState()
             restartGlances()
+        } else {
+            actions?.cancel("offline") // its result could not be sent, and would be stale later
         }
     }
 
@@ -685,6 +703,7 @@ class MayaService : Service() {
         status = Status.AUTH
         updateNotification()
         overlay?.setConnected(false)
+        actions?.cancel("offline")
     }
 
     private fun screenSize(): Pair<Int, Int> {

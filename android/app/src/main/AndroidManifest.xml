@@ -13,8 +13,11 @@
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Set a timer or an alarm in the clock app when asked (a normal permission). -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
-    <!-- Package visibility (API 30+): see launcher apps to label them, and home apps to ignore them. -->
+    <!-- Package visibility (API 30+): see launcher apps to label them (and to open one when asked),
+         and home apps to ignore them. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -27,6 +30,20 @@
         <!-- Speech recognition services (hold Maya to talk). -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- "Let Maya use my phone": the clock app (timers, alarms) and web search / the browser. -->
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.WEB_SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
         </intent>
     </queries>
 
@@ -75,7 +92,8 @@
             </intent-filter>
         </service>
 
-        <!-- Screen access: the visible text and buttons of the current app. Never performs gestures. -->
+        <!-- Screen access: the visible text and buttons of the current app; with "Let Maya use my
+             phone" on, also pressing, typing and scrolling when asked. -->
         <service
             android:name=".senses.MayaAccessibilityService"
             android:exported="true"

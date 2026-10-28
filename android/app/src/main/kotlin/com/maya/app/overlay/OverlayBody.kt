@@ -23,6 +23,7 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import com.maya.app.OverlayHook
 import com.maya.app.R
+import com.maya.app.actions.ActionBody
 import com.maya.app.voice.VoiceInput
 import com.maya.core.Act
 import com.maya.core.Action
@@ -33,6 +34,7 @@ import com.maya.core.Body
 import com.maya.core.BodyMoment
 import com.maya.core.BodyReporter
 import com.maya.core.BodySnapshot
+import com.maya.core.Box
 import com.maya.core.ErrorMsg
 import com.maya.core.Event
 import com.maya.core.Gesture
@@ -63,14 +65,15 @@ private const val TAG = "MayaOverlay"
  * The loop only runs while she is visible and the screen is on and unlocked ([setScreenOn]).
  * Holding her still for [HOLD_TO_TALK_MS] starts listening ([VoiceInput]); [onListening] reports
  * when listening starts and ends. Lines (and typing dots) that arrive while she listens, or while
- * the bubble still shows what she heard, wait and are shown right after. Must be created and used
- * on the main thread.
+ * the bubble still shows what she heard, wait and are shown right after. As the action runner's
+ * [ActionBody] she asks the user in her bubble (lines wait meanwhile too), walks to a button and
+ * pokes it, and holds a pose while she types. Must be created and used on the main thread.
  */
 class OverlayBody(
     context: Context,
     private val emit: (Event) -> Unit,
     private val onListening: (Boolean) -> Unit = {},
-) : OverlayHook {
+) : OverlayHook, ActionBody {
     private val ctx: Context = overlayContext(context)
     private val wm: WindowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val density = ctx.resources.displayMetrics.density
@@ -151,6 +154,21 @@ class OverlayBody(
     /** The latest typing state that arrived while the bubble was held (null: none). */
     private var deferredTyping: Boolean? = null
     private val releaseBubble = Runnable { showDeferred() }
+
+    // action state (ActionBody)
+    /** The runner's callback for the question in her bubble; null when not asking. */
+    private var confirmAnswer: ((Boolean?) -> Unit)? = null
+    /** The runner's callback for the press she is walking to; null when none. */
+    private var pressResult: ((Boolean) -> Unit)? = null
+    /** A pose the runner holds (e.g. `type`). */
+    private var actPose: String? = null
+    /** She holds the `poke` pose (her press lands) until [endPoke]. */
+    private var poking = false
+    private val endPoke = Runnable {
+        poking = false
+        updatePose()
+    }
+    private val restoreTouches = Runnable { setTouchable(true) }
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -257,11 +275,19 @@ class OverlayBody(
         main.removeCallbacks(endLook)
     }
 
-    /** Sustained pose from what's going on: listening beats talking beats looking beats thinking. */
+    /**
+     * Sustained pose from what's going on: listening beats asking, then her poke as a press lands,
+     * then walking to a press (no pose: she must move), then the runner's pose (typing), then
+     * talking, looking and thinking.
+     */
     private fun updatePose() {
         behavior.setPose(
             when {
                 listening -> "listen"
+                confirmAnswer != null -> "ask"
+                poking -> "poke"
+                pressResult != null -> null
+                actPose != null -> actPose
                 speaking -> "talk"
                 looking && connected -> "look"
                 thinking && connected -> "think"
@@ -293,7 +319,125 @@ class OverlayBody(
         } else {
             stopLoop()
             cancelListening()
+            dropActions()
         }
+    }
+
+    // ---- ActionBody ----
+
+    override val isShowing: Boolean get() = visible && !destroyed
+
+    override fun confirm(question: String, onAnswer: (Boolean?) -> Unit): Boolean {
+        if (!visible || destroyed || listening) return false
+        answerConfirm(null) // an older question goes away
+        // The question replaces what she heard; lines that wait are shown after the answer.
+        main.removeCallbacks(releaseBubble)
+        heardUntilMs = 0L
+        confirmAnswer = onAnswer
+        bubble.ask(question, { answerConfirm(true) }, { answerConfirm(false) })
+        updatePose()
+        return true
+    }
+
+    override fun cancelConfirm() {
+        if (confirmAnswer == null) return
+        confirmAnswer = null
+        endConfirm()
+    }
+
+    override fun press(box: Box, onResult: (Boolean) -> Unit): Boolean {
+        if (!visible || destroyed || !looping) return false
+        pressResult = null
+        if (restricted || box.top >= floorY()) {
+            // She can't walk there now (keyboard open, a call) or it is below her floor (a bottom
+            // bar): she pokes where she stands, and the press goes ahead.
+            holdPoke()
+            onResult(true)
+            return true
+        }
+        pressResult = onResult
+        updatePose() // no pose while she walks
+        behavior.commandPress(box)
+        return true
+    }
+
+    override fun cancelPress() {
+        if (pressResult == null) return
+        pressResult = null
+        updatePose()
+    }
+
+    override fun setActPose(name: String?) {
+        if (name == actPose) return
+        actPose = name
+        updatePose()
+    }
+
+    override fun letTouchesThrough(ms: Long) {
+        setTouchable(false)
+        main.removeCallbacks(restoreTouches)
+        main.postDelayed(restoreTouches, ms)
+    }
+
+    /** Her window takes touches, or lets them through to the app (see-through enough for Android 12+ to pass them). */
+    private fun setTouchable(on: Boolean) {
+        val flags = if (on) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        val alpha = if (on) 1f else MAX_PASS_THROUGH_ALPHA
+        if (flags == params.flags && alpha == params.alpha) return
+        params.flags = flags
+        params.alpha = alpha
+        if (visible) updateSafely(wm, spriteView, params)
+    }
+
+    /** Ends the question with [yes] (null: it went away with her) and tells the runner. */
+    private fun answerConfirm(yes: Boolean?) {
+        val callback = confirmAnswer ?: return
+        confirmAnswer = null
+        endConfirm()
+        callback(yes)
+    }
+
+    /** The bubble is plain again; lines that waited for the answer are shown. */
+    private fun endConfirm() {
+        bubble.cancelAsk()
+        updatePose()
+        if (!bubbleHeld()) showDeferred()
+    }
+
+    /** Every frame: tells the runner when her poke on the press box starts, or that she can't get there. */
+    private fun checkPress() {
+        val callback = pressResult ?: return
+        val done = behavior.pressDone()
+        if (!done && !behavior.pressTargetLost()) return
+        pressResult = null
+        if (done) holdPoke() else updatePose()
+        callback(done)
+    }
+
+    /** The `poke` pose for a moment (her poke must show, whatever else she is doing meanwhile). */
+    private fun holdPoke() {
+        poking = true
+        main.removeCallbacks(endPoke)
+        main.postDelayed(endPoke, POKE_POSE_MS)
+        updatePose()
+    }
+
+    /** She went away (hidden, screen off): a question is withdrawn and a press is lost. */
+    private fun dropActions() {
+        answerConfirm(null)
+        losePress()
+    }
+
+    /** The press under way (if any) can't happen: the runner hears so. */
+    private fun losePress() {
+        val callback = pressResult ?: return
+        pressResult = null
+        updatePose()
+        callback(false)
     }
 
     // ---- lifecycle ----
@@ -307,6 +451,9 @@ class OverlayBody(
     }
 
     fun hide() {
+        dropActions()
+        main.removeCallbacks(restoreTouches)
+        setTouchable(true)
         stopLoop()
         cancelThrow()
         if (dragging) releaseAtWindow()
@@ -326,6 +473,7 @@ class OverlayBody(
         hide()
         stopLooking()
         main.removeCallbacks(releaseBubble)
+        main.removeCallbacks(endPoke)
         deferredSay = null
         deferredTyping = null
         voice.destroy()
@@ -353,6 +501,7 @@ class OverlayBody(
             refreshScreenSize()
         }
         behavior.tick(dtMs)
+        checkPress()
         spriteView.setAnimation(behavior.animation)
         spriteView.facingLeft = behavior.facingLeft
         spriteView.advance(dtMs)
@@ -503,6 +652,11 @@ class OverlayBody(
     private fun onTap(wasDragging: Boolean) {
         // A tap that ended a drag-start (finger wandered and came back) still has to release her.
         if (wasDragging) releaseAtWindow()
+        // While she asks, a tap on her is a no.
+        if (confirmAnswer != null) {
+            answerConfirm(false)
+            return
+        }
         // A tap while she teases a button shoos her off it: the brain still hears the tap, but
         // no chat window opens.
         val shooed = behavior.tapped()
@@ -524,6 +678,7 @@ class OverlayBody(
         val held = SystemClock.uptimeMillis() - downTimeMs
         val moved = hypot(lastRawX - downRawX, lastRawY - downRawY)
         if (!isHoldToTalk(moved, held, touchSlop.toFloat())) return
+        if (confirmAnswer != null) return // her bubble holds a question: answer it with ✔ / ✖ (or tap her)
         holdFired = true
         if (listening) return // the previous session is still delivering its result
         startListening()
@@ -566,8 +721,8 @@ class OverlayBody(
         showDeferred()
     }
 
-    /** True while lines must wait: she is listening, or the bubble shows how listening ended. */
-    private fun bubbleHeld(): Boolean = listening || SystemClock.uptimeMillis() < heardUntilMs
+    /** True while lines must wait: she is listening or asking, or the bubble shows how listening ended. */
+    private fun bubbleHeld(): Boolean = listening || confirmAnswer != null || SystemClock.uptimeMillis() < heardUntilMs
 
     /** Listening ended with a bubble ([HEARD_MIN_MS] to read it); waiting lines follow it. */
     private fun holdEndBubble() {
@@ -578,6 +733,7 @@ class OverlayBody(
 
     /** Shows the line (or typing dots) that waited while the bubble was held. */
     private fun showDeferred() {
+        if (confirmAnswer != null) return // shown once the question is answered
         main.removeCallbacks(releaseBubble)
         heardUntilMs = 0L
         val say = deferredSay
@@ -750,6 +906,7 @@ class OverlayBody(
         val oldY = params.y
         screenW = w
         screenH = h
+        losePress() // the old body's press can't finish
         behavior = newBehavior()
         behavior.dragEnd(oldX.coerceIn(0, maxX()).toFloat(), oldY.coerceIn(0, maxY()).toFloat())
         if (held()) behavior.dragStart()
@@ -792,6 +949,10 @@ class OverlayBody(
         const val HEARD_BUBBLE_MS = 2500L
         const val HEARD_MIN_MS = 1500L // nothing replaces the heard text (or a problem) before this
         const val VOICE_PROBLEM_BUBBLE_MS = 4000L
+        /** Her poke on a pressed button shows at least this long. */
+        const val POKE_POSE_MS = 800L
+        /** Android 12+ passes touches through an overlay only up to this opacity. */
+        const val MAX_PASS_THROUGH_ALPHA = 0.8f
     }
 }
 

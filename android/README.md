@@ -116,7 +116,7 @@ Maya can notice when someone messages you (WhatsApp, SMS, Telegram, email, a mis
 
 ## 9. Let Maya see your screen
 
-Maya can read what's on the screen of the app you're using: its visible text (so she can talk about what you're looking at) and its buttons (so she can stand on them, sit on a **Send** or **Like** button to tease you, and fall off when you scroll). She never presses anything.
+Maya can read what's on the screen of the app you're using: its visible text (so she can talk about what you're looking at) and its buttons (so she can stand on them, sit on a **Send** or **Like** button to tease you, and fall off when you scroll). She never presses anything unless you switch on **Let Maya use my phone** (section 12).
 
 1. In the app, under **Permissions**, tap **Grant** next to **Screen access**. Android opens **Accessibility**. On Samsung, tap **Installed apps** (or **Downloaded apps**), then **Maya**, and switch it on. Android warns that the app can see your screen; tap **Allow**.
 2. If the switch is greyed out or Android says it's a **restricted setting** (common for apps installed from an APK), go to **Settings** → **Apps** → **Maya**, tap **⋮** (top right) → **Allow restricted settings**, confirm with your PIN or fingerprint, then go back and switch Maya on.
@@ -151,6 +151,27 @@ Some banking apps refuse to open, or close themselves, while Maya is running. Th
 
 While Screen access is off, Maya only walks along the bottom of the screen and doesn't read or look at anything. She still steps away from do-not-watch apps, but only if **Usage access** is granted, and only within about 5 seconds of the app opening (Usage access is checked every 5 seconds).
 
+## 12. Let Maya use your phone
+
+With **Let Maya use my phone** on (under **Using your phone** in the app; it is **off** until you switch it on), Maya can do things on the phone when you ask her, for example "play the next song", "set a timer for 10 minutes" or "open Spotify":
+
+- **Open an app** by its name.
+- **Music**: play/pause, next, previous (whatever app is playing).
+- **Volume**: up, down, mute.
+- **Timers and alarms** in the phone's clock app.
+- **Search the web** (the phone's search app, or Google in the browser).
+- **Scroll** the app you're in up or down.
+- **Press a button** in the app you're in: she walks over to it, pokes it, and it gets pressed.
+- **Type** into a text field (the one you're in, or the one she names). She never presses Send after typing.
+
+**The yes rule.** Before anything risky she asks first, in her speech bubble, with ✔ and ✖: "Can I press Send?", or "Can I type that?" with the start of the text. Risky means **any typing**, and pressing a button that sends, posts, publishes, buys, pays, orders, deletes, removes, calls, shares, comments, follows, subscribes, confirms, submits, installs or replies (in English or Arabic). Tap **✔** to let her, **✖** (or tap Maya herself) to say no. If you don't answer within 15 seconds, it's a no. She does one thing at a time.
+
+**Where she never acts.** On the lock screen, in Android's Settings, in the notification shade, in her own settings, in the apps in **Never watch these apps** (and anything with "bank" in its package name), and never in password fields. Pressing, typing and scrolling need **Screen access** and **Let Maya read my screen** (section 9); the rest works without them. If she's hidden (from the notification) she won't press or type.
+
+Every time, your PC hears how it went (done, you said no, no answer, couldn't, or not allowed), so she can tell you. To stop it all, switch **Let Maya use my phone** off; it takes effect at once.
+
+After updating to a version with this feature, Android may ask you to switch **Screen access** on again, because Maya can now also press and tap.
+
 ## Troubleshooting
 
 | What you see | What to do |
@@ -170,6 +191,8 @@ While Screen access is off, Maya only walks along the bottom of the screen and d
 | Holding Maya says "set up offline English speech" | **Allow Google voice typing** is off and the phone's strict offline recognizer is missing or has no English (common on Samsung, even with the Speech Services by Google English pack downloaded). Turn **Allow Google voice typing** on (section 7), or see **Offline English speech** in section 7. |
 | Holding Maya says "speech recognition failed, try again" | Google voice typing couldn't work: usually no internet and no offline English pack. Connect to the internet, or download English (US) for **Speech Services by Google** (see **Offline English speech** in section 7), then hold her again. |
 | Holding Maya says "this phone has no speech recognizer" | The phone has no speech service at all. Install or enable **Speech Services by Google** from the Play Store, and pick it as the voice input in the phone's settings. |
+| Maya says she can't press, type or scroll | Check **Let Maya use my phone** is on, **Screen access** has a tick (✓) and **Let Maya read my screen** is on, the screen is unlocked, and you're not in Settings, her own settings or a do-not-watch app. If she says the button isn't on screen, scroll so you can see it and ask again. |
+| Maya opens nothing, or timers don't start | Check **Let Maya use my phone** is on. Timers and alarms need a clock app (Samsung's Clock works). |
 | She answers in text but never out loud | Check **Maya's voice** isn't **Off**, the phone isn't on silent or vibrate, and the PC voice is set up (brain guide, Voice section). |
 
 ## Changing Maya's look (sprites)

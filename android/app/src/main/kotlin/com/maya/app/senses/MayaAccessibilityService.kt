@@ -1,6 +1,7 @@
 package com.maya.app.senses
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.app.KeyguardManager
@@ -8,8 +9,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Resources
 import android.graphics.Bitmap
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -30,6 +33,7 @@ import com.maya.core.TextNode
 import com.maya.core.UiNode
 import com.maya.core.buildLayout
 import com.maya.core.extractLines
+import com.maya.core.matchLabel
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -37,21 +41,44 @@ import java.util.concurrent.RejectedExecutionException
 import kotlin.math.roundToInt
 
 /**
- * Maya's eyes. Needs the special "Accessibility" permission (config: res/xml/accessibility_config.xml;
- * it never performs gestures or clicks). Reads only the active window's node tree plus the window
+ * Maya's eyes and hands. Needs the special "Accessibility" permission (config:
+ * res/xml/accessibility_config.xml). Reads only the active window's node tree plus the window
  * list (to find the keyboard), and only while MayaService runs with "Let Maya read my screen" on
  * ([ScreenBridge.sink] set):
  * - on events it rebuilds the layout (platforms + tease targets + picture boxes) at most every
  *   500 ms and reports it, and app changes, to the sink;
  * - it reads the visible text only when MayaService asks for a [glance];
  * - it takes a [screenshot] (Android 11+) only when MayaService asks for one; MayaService decides
- *   whether the screen may be looked at.
+ *   whether the screen may be looked at;
+ * - as [PhoneHands] it clicks, types, scrolls or taps only when the action runner asks (with "Let
+ *   Maya use my phone" on); the runner decides whether it may, and checks again in the same pass.
  * Never reads password nodes, the content of editable nodes (or anything inside them), do-not-watch
  * apps, Maya herself, system UI or the lock screen. Never logs screen text or screenshots, never
  * writes a screenshot to disk. Callbacks and every call into it happen on the main thread.
  */
-class MayaAccessibilityService : AccessibilityService(), GlanceSource {
+class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHands {
     private class Seen(val ui: List<UiNode>, val text: List<TextNode>)
+
+    /**
+     * A visible node of one live pass, for acting on it. [clickIdx] is the index (in the pass) of
+     * the nearest clickable, enabled node at or above it, -1 if none. [field] is an editable,
+     * non-password node.
+     */
+    private class LiveNode(
+        val ui: UiNode,
+        val info: AccessibilityNodeInfo,
+        val clickIdx: Int,
+        val field: Boolean,
+        val focused: Boolean,
+        val scrollable: Boolean,
+    )
+
+    /**
+     * One pass over the active window: its package and visible nodes (parents before children).
+     * Not [readable] (no nodes) for apps she never reads: do-not-watch, Settings, system UI, Maya
+     * herself, or a locked or dark screen.
+     */
+    private class LivePass(val pkg: String?, val readable: Boolean, val nodes: List<LiveNode>)
 
     private val main = Handler(Looper.getMainLooper())
     private val labels = HashMap<String, String>()
@@ -84,6 +111,7 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         super.onServiceConnected()
         if (encoder?.isShutdown != false) encoder = Executors.newSingleThreadExecutor()
         ScreenBridge.service = this
+        ScreenBridge.hands = this
         refresh()
     }
 
@@ -232,6 +260,7 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         layoutPending = false
         boundSink = null
         if (ScreenBridge.service === this) ScreenBridge.service = null
+        if (ScreenBridge.hands === this) ScreenBridge.hands = null
     }
 
     private fun bindTo(sink: ScreenSink) {
@@ -241,6 +270,186 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         appLayout = Layout.EMPTY
         lastKeyboardTop = null
         doNotWatch = DoNotWatch(Prefs(this).doNotWatch)
+    }
+
+    // ---- hands ("Let Maya use my phone") ----
+
+    override fun activePackage(): String? {
+        if (ScreenBridge.sink == null) return null
+        return try {
+            val root = rootInActiveWindow ?: return null
+            try {
+                root.packageName?.toString()
+            } finally {
+                release(root)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read the active window: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    override fun findButton(target: String): PressNode? = withLiveTree { pass ->
+        matchButton(pass, target)?.let { pressNodeOf(pass, it) }
+    }
+
+    override fun click(target: String, allow: (String?, PressNode) -> Boolean): Clicked = withLiveTree { pass ->
+        val n = matchButton(pass, target)
+        val press = n?.let { pressNodeOf(pass, it) }
+        when {
+            !pass.readable -> Clicked(HandResult.REFUSED, null)
+            n == null || press == null -> Clicked(HandResult.NOT_FOUND, null)
+            !allow(pass.pkg, press) -> Clicked(HandResult.REFUSED, press)
+            // the node itself when clickable, else its nearest clickable ancestor
+            pass.nodes[n.clickIdx].info.performAction(AccessibilityNodeInfo.ACTION_CLICK) -> Clicked(HandResult.DONE, press)
+            else -> Clicked(HandResult.FAILED, press)
+        }
+    } ?: Clicked(HandResult.NOT_FOUND, null)
+
+    override fun tap(x: Int, y: Int, onDone: (Boolean) -> Unit): Boolean {
+        if (ScreenBridge.sink == null) return false
+        val path = Path()
+        path.moveTo(x.toFloat(), y.toFloat())
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, TAP_MS))
+            .build()
+        val callback = object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) = onDone(true)
+
+            override fun onCancelled(gestureDescription: GestureDescription?) = onDone(false)
+        }
+        return try {
+            dispatchGesture(gesture, callback, main)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not tap: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+
+    override fun findField(into: String?): UiNode? = withLiveTree { pass -> fieldOf(pass, into)?.ui }
+
+    override fun setText(into: String?, text: String, allow: (String?, UiNode) -> Boolean): HandResult = withLiveTree { pass ->
+        val f = fieldOf(pass, into)
+        when {
+            !pass.readable -> HandResult.REFUSED
+            f == null -> HandResult.NOT_FOUND
+            // read again in this pass: never a password field, whatever the app did meanwhile
+            f.info.isPassword || !f.info.isEditable || !allow(pass.pkg, f.ui) -> HandResult.REFUSED
+            else -> {
+                val args = Bundle()
+                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                if (f.info.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) HandResult.DONE else HandResult.FAILED
+            }
+        }
+    } ?: HandResult.NOT_FOUND
+
+    override fun scroll(forward: Boolean, allow: (String?) -> Boolean): HandResult = withLiveTree { pass ->
+        val s = pass.nodes.filter { it.scrollable }.maxByOrNull { it.ui.bounds.width.toLong() * it.ui.bounds.height }
+        val action = if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        when {
+            !pass.readable || !allow(pass.pkg) -> HandResult.REFUSED
+            s == null -> HandResult.NOT_FOUND
+            s.info.performAction(action) -> HandResult.DONE
+            else -> HandResult.FAILED
+        }
+    } ?: HandResult.NOT_FOUND
+
+    /**
+     * Runs [block] over a fresh pass of the active window, then releases every node it read. Null
+     * without a sink (the screen sense is off), without an active window, or when reading failed.
+     * The nodes of an app she never reads are not read at all (the pass is not readable).
+     */
+    private fun <T> withLiveTree(block: (LivePass) -> T): T? {
+        val sink = ScreenBridge.sink ?: return null
+        bindTo(sink)
+        val all = ArrayList<AccessibilityNodeInfo>()
+        return try {
+            val root = rootInActiveWindow ?: return null
+            all.add(root)
+            val pkg = root.packageName?.toString()
+            val readable = pkg != null && pkg !in NEVER_CAPTURE && readable(pkg)
+            block(LivePass(pkg, readable, if (readable) liveNodes(root, all) else emptyList()))
+        } catch (e: Exception) {
+            Log.w(TAG, "could not act on the screen: ${e.javaClass.simpleName}")
+            null
+        } finally {
+            for (n in all) release(n)
+        }
+    }
+
+    /**
+     * Depth-first over the visible nodes from [root], at most [MAX_NODES]; every node read is added
+     * to [all] (for releasing). Like [collect], password nodes give no text or description and
+     * editable nodes no text, and neither is descended into. A node inside a clickable one counts
+     * as clickable (a label in a button finds the button). An editable node's description is its
+     * hint plus its content description (what `into` is matched against).
+     */
+    private fun liveNodes(root: AccessibilityNodeInfo, all: MutableList<AccessibilityNodeInfo>): List<LiveNode> {
+        val out = ArrayList<LiveNode>()
+        val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        val r = Rect()
+        stack.addLast(root to -1)
+        var visited = 0
+        while (stack.isNotEmpty() && visited < MAX_NODES) {
+            val (node, parentClick) = stack.removeLast()
+            visited++
+            if (!node.isVisibleToUser) continue
+            node.getBoundsInScreen(r)
+            val password = node.isPassword
+            val editable = node.isEditable
+            val clickIdx = if (node.isClickable && node.isEnabled) out.size else parentClick
+            val description = when {
+                password -> null
+                editable -> fieldLabel(node)
+                else -> node.contentDescription?.toString()
+            }
+            val ui = UiNode(
+                bounds = Box(r.left, r.top, r.right, r.bottom),
+                clickable = clickIdx >= 0,
+                editable = editable,
+                image = false,
+                viewId = node.viewIdResourceName,
+                description = description,
+                text = if (password || editable) null else node.text?.toString(),
+            )
+            out.add(LiveNode(ui, node, clickIdx, editable && !password, node.isFocused, node.isScrollable))
+            if (password || editable) continue
+            // Pushed last-first so the first child is visited first.
+            for (i in node.childCount - 1 downTo 0) {
+                val child = node.getChild(i) ?: continue
+                all.add(child)
+                stack.addLast(child to clickIdx)
+            }
+        }
+        return out
+    }
+
+    /** What a text field says about itself: its hint and its content description (never its text). */
+    private fun fieldLabel(node: AccessibilityNodeInfo): String? =
+        listOfNotNull(node.hintText?.toString(), node.contentDescription?.toString())
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .ifBlank { null }
+
+    /** The node [target] means: core [matchLabel] over the pass (the smallest match wins). */
+    private fun matchButton(pass: LivePass, target: String): LiveNode? {
+        val ui = pass.nodes.map { it.ui }
+        val m = matchLabel(target, ui) ?: return null
+        return pass.nodes.getOrNull(ui.indexOfFirst { it === m })
+    }
+
+    private fun pressNodeOf(pass: LivePass, n: LiveNode): PressNode? =
+        pass.nodes.getOrNull(n.clickIdx)?.let { PressNode(n.ui, it.ui) }
+
+    /** The focused text field, else the one whose hint or description matches [into]; never a password field. */
+    private fun fieldOf(pass: LivePass, into: String?): LiveNode? {
+        val fields = pass.nodes.filter { it.field }
+        fields.firstOrNull { it.focused }?.let { return it }
+        if (into.isNullOrBlank()) return null
+        // matchLabel only looks at clickable nodes; any field may be typed into
+        val ui = fields.map { it.ui.copy(clickable = true) }
+        val m = matchLabel(into, ui) ?: return null
+        return fields.getOrNull(ui.indexOfFirst { it === m })
     }
 
     // ---- layout ----
@@ -450,6 +659,8 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         /** Never in a screenshot (besides do-not-watch apps and Maya herself). */
         val NEVER_CAPTURE = setOf(SYSTEM_UI, "com.android.settings")
         const val MAX_NODES = 600
+        /** A fallback tap (when a button won't take ACTION_CLICK) lasts this long. */
+        const val TAP_MS = 50L
         const val LAYOUT_GAP_MS = 500L
         const val MIN_IMAGE_DP = 48f
         const val STATUS_BAR_FALLBACK_DP = 24f

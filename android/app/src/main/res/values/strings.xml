@@ -37,13 +37,16 @@
     <string name="see_notifications_note">She only sees the app and who it\'s from (and the group name), never the message itself. Needs Notification access above.</string>
     <string name="section_screen">Screen</string>
     <string name="read_screen">Let Maya read my screen</string>
-    <string name="read_screen_note">She sees the text and buttons of the app you\'re using, so she can talk about it and sit on its buttons. Never passwords, never what you type, never the apps in the list below. On Android 11 and newer she also takes a screenshot now and then when the screen is mostly pictures, or when you ask her to look (kept in memory only, never saved). She never presses anything. Needs Screen access above.</string>
+    <string name="read_screen_note">She sees the text and buttons of the app you\'re using, so she can talk about it and sit on its buttons. Never passwords, never what you type, never the apps in the list below. On Android 11 and newer she also takes a screenshot now and then when the screen is mostly pictures, or when you ask her to look (kept in memory only, never saved). She only presses anything when \"Let Maya use my phone\" is on. Needs Screen access above.</string>
+    <string name="section_actions">Using your phone</string>
+    <string name="allow_actions">Let Maya use my phone</string>
+    <string name="allow_actions_note">She can open apps, control music, set timers and press buttons. Anything that sends, posts, buys or deletes needs your yes.</string>
     <string name="section_do_not_watch">Never watch these apps (one package per line)</string>
     <string name="start_maya">Start Maya</string>
     <string name="stop_maya">Stop Maya</string>
 
     <!-- Accessibility service (shown in Android's accessibility settings) -->
-    <string name="accessibility_description">Lets Maya see the text and buttons of the app you\'re using, and now and then a screenshot to see its pictures (kept in memory only, never saved). She never presses anything.</string>
+    <string name="accessibility_description">Lets Maya see the text and buttons of the app you\'re using, and now and then a screenshot to see its pictures (kept in memory only, never saved). Only if you switch on \"Let Maya use my phone\" in her settings can she press buttons, type or scroll for you, and she asks first before anything that sends, posts, buys or deletes.</string>
 
     <!-- Service -->
     <string name="channel_name">Maya</string>
@@ -65,4 +68,8 @@
     <string name="bubble_no_recognizer">I can\'t hear you — this phone has no speech recognizer</string>
     <string name="bubble_offline_missing">I can\'t hear you — set up offline English speech in my settings</string>
     <string name="bubble_recognition_failed">I can\'t hear you — speech recognition failed, try again</string>
+
+    <!-- Her confirm bubble (with ✔ and ✖) before a risky action -->
+    <string name="ask_press">Can I press %1$s?</string>
+    <string name="ask_type">Can I type that?</string>
 </resources>

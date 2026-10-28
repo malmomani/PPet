@@ -5,14 +5,17 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
  * Maya's speech bubble: its own small overlay window (not focusable, not touchable) that sits above
  * the sprite, centred on it and clamped to the screen. [follow] is called every frame with the
- * sprite's position; the window is only attached while a bubble is showing.
+ * sprite's position; the window is only attached while a bubble is showing. While she [ask]s, the
+ * bubble also shows ✔ and ✖ and is the only time the window takes touches.
  */
 class BubbleView(context: Context, private val wm: WindowManager) {
     private val density = context.resources.displayMetrics.density
@@ -22,6 +25,23 @@ class BubbleView(context: Context, private val wm: WindowManager) {
     private val textView = TextView(context).apply {
         textSize = 14f // sp
         setTextColor(TEXT_COLOR)
+    }
+
+    private val yesButton = answerButton(context, YES, YES_COLOR) { answer(true) }
+    private val noButton = answerButton(context, NO, NO_COLOR) { answer(false) }
+
+    /** ✔ and ✖, only shown while asking. */
+    private val buttons = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.END
+        visibility = View.GONE
+        addView(yesButton)
+        addView(noButton)
+    }
+
+    /** The window's view: the text, and under it the answer buttons. */
+    private val bubbleRoot = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
         val pad = dp(10)
         setPadding(pad, pad, pad, pad)
         background = GradientDrawable().apply {
@@ -29,14 +49,14 @@ class BubbleView(context: Context, private val wm: WindowManager) {
             cornerRadius = dp(12).toFloat()
             setStroke(dp(1), BORDER_COLOR)
         }
+        addView(textView)
+        addView(buttons)
     }
 
     private val params = overlayParams(
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PASSIVE_FLAGS,
     ).apply {
         // Android 12+ drops touches that pass through another app's overlay unless its alpha is
         // <= InputManager.getMaximumObscuringOpacityForTouch() (0.8, inclusive); without this the
@@ -52,7 +72,14 @@ class BubbleView(context: Context, private val wm: WindowManager) {
     private var anchorSize = 0
     private var screenW = 0
 
+    // The question being asked (both null when not asking).
+    private var onYes: (() -> Unit)? = null
+    private var onNo: (() -> Unit)? = null
+
     val isShowing: Boolean get() = attached
+
+    /** True while a question with ✔ / ✖ is up. */
+    val isAsking: Boolean get() = onYes != null
 
     /** Shows [text] for [ms] milliseconds (replacing whatever the bubble showed). */
     fun say(text: String, ms: Long) {
@@ -67,9 +94,28 @@ class BubbleView(context: Context, private val wm: WindowManager) {
     fun typing(on: Boolean) {
         if (on) {
             show(TYPING)
-        } else if (attached && textView.text.toString() == TYPING) {
+        } else if (attached && !isAsking && textView.text.toString() == TYPING) {
             hide()
         }
+    }
+
+    /**
+     * Shows [text] with ✔ and ✖ until one is tapped (the bubble then closes and [yes] or [no] is
+     * called, once) or the question is withdrawn ([cancelAsk], [hide], or anything else shown in
+     * the bubble: then neither is called). The window takes touches only while asking.
+     */
+    fun ask(text: String, yes: () -> Unit, no: () -> Unit) {
+        onYes = yes
+        onNo = no
+        buttons.visibility = View.VISIBLE
+        params.flags = ASKING_FLAGS
+        params.alpha = 1f // nothing passes through it while it takes touches
+        showContent(text)
+    }
+
+    /** Withdraws the question (if any) and closes the bubble; neither answer is called. */
+    fun cancelAsk() {
+        if (isAsking) hide()
     }
 
     /** Called every frame with the sprite window's position and the current screen width. */
@@ -82,39 +128,67 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         anchorX = spriteX
         anchorY = spriteY
         anchorSize = spriteSize
-        if (attached && place()) updateSafely(wm, textView, params)
+        if (attached && place()) updateSafely(wm, bubbleRoot, params)
     }
 
     fun hide() {
         main.removeCallbacks(hideRunnable)
         if (attached) {
-            removeSafely(wm, textView)
+            removeSafely(wm, bubbleRoot)
             attached = false
         }
+        endAsk()
     }
 
     fun destroy() = hide()
 
+    private fun answer(yes: Boolean) {
+        val callback = (if (yes) onYes else onNo) ?: return
+        hide() // ends the question first, so the callback is called once
+        callback()
+    }
+
+    /** Back to a plain bubble: no buttons, no touches, see-through enough for taps to pass. */
+    private fun endAsk() {
+        if (!isAsking) return
+        onYes = null
+        onNo = null
+        buttons.visibility = View.GONE
+        params.flags = PASSIVE_FLAGS
+        params.alpha = MAX_PASS_THROUGH_ALPHA
+        if (attached) {
+            measure()
+            place()
+            updateSafely(wm, bubbleRoot, params)
+        }
+    }
+
+    /** Plain text replaces whatever was up, a question included (withdrawn without an answer). */
     private fun show(text: String) {
+        endAsk()
+        showContent(text)
+    }
+
+    private fun showContent(text: String) {
         main.removeCallbacks(hideRunnable)
         textView.text = text
         measure()
         place()
         if (attached) {
-            updateSafely(wm, textView, params)
+            updateSafely(wm, bubbleRoot, params)
         } else {
-            attached = addSafely(wm, textView, params)
+            attached = addSafely(wm, bubbleRoot, params)
         }
     }
 
     private fun measure() {
         val maxW = if (screenW > 0) (screenW * MAX_WIDTH_FRACTION).toInt() else Int.MAX_VALUE / 2
-        textView.measure(
+        bubbleRoot.measure(
             View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
         )
-        bubbleW = textView.measuredWidth
-        bubbleH = textView.measuredHeight
+        bubbleW = bubbleRoot.measuredWidth
+        bubbleH = bubbleRoot.measuredHeight
     }
 
     /** Computes the window position from the anchor; returns true if it changed. */
@@ -130,14 +204,40 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         return true
     }
 
+    /** A big round-ish tap target for ✔ or ✖. */
+    private fun answerButton(context: Context, label: String, color: Int, onTap: () -> Unit): TextView =
+        TextView(context).apply {
+            text = label
+            textSize = 20f // sp
+            setTextColor(color)
+            gravity = Gravity.CENTER
+            minWidth = dp(BUTTON_DP)
+            minHeight = dp(BUTTON_DP)
+            isClickable = true
+            setOnClickListener { onTap() }
+        }
+
     private fun dp(v: Int): Int = (v * density).toInt()
 
     private companion object {
         const val TYPING = "…"
+        const val YES = "✔"
+        const val NO = "✖"
         const val DEFAULT_BUBBLE_MS = 4000L
         const val MAX_WIDTH_FRACTION = 0.7f
         const val MAX_PASS_THROUGH_ALPHA = 0.8f
+        const val BUTTON_DP = 48
         const val TEXT_COLOR = 0xFF222222.toInt()
         const val BORDER_COLOR = 0xFFCCCCCC.toInt()
+        const val YES_COLOR = 0xFF2E7D32.toInt()
+        const val NO_COLOR = 0xFFC62828.toInt()
+        const val PASSIVE_FLAGS = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
+        /** Touchable, still never focused; touches outside it go to the app behind. */
+        const val ASKING_FLAGS = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
     }
 }

@@ -53,6 +53,14 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_ALLOW_ONLINE_SPEECH, true)
         set(value) = sp.edit().putBoolean(KEY_ALLOW_ONLINE_SPEECH, value).apply()
 
+    /**
+     * "Let Maya use my phone": the brain's `act` actions (open apps, media, timers, press, type,
+     * scroll) run; off, every one is refused. Off by default. Read live by the action runner.
+     */
+    var allowActions: Boolean
+        get() = sp.getBoolean(KEY_ALLOW_ACTIONS, false)
+        set(value) = sp.edit().putBoolean(KEY_ALLOW_ACTIONS, value).apply()
+
     /** The brain's WebSocket URL, or null until both host and token are set. Contains the token: never log it. */
     fun wsUrl(): String? {
         val h = host.trim()
@@ -78,5 +86,6 @@ class Prefs(context: Context) {
         private const val KEY_SEE_NOTIFICATIONS = "see_notifications"
         private const val KEY_READ_SCREEN = "read_screen"
         private const val KEY_ALLOW_ONLINE_SPEECH = "allow_online_speech"
+        private const val KEY_ALLOW_ACTIONS = "allow_actions"
     }
 }

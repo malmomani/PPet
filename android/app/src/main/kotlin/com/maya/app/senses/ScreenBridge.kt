@@ -5,6 +5,7 @@ import android.hardware.display.DisplayManager
 import android.util.DisplayMetrics
 import android.view.Display
 import com.maya.core.Layout
+import com.maya.core.UiNode
 
 /** Receives what [MayaAccessibilityService] sees. Called on the main thread. */
 interface ScreenSink {
@@ -52,6 +53,67 @@ interface GlanceSource {
     fun frontApp(): String?
 }
 
+/**
+ * A button found for a press in the active window: [node] is the node the target matched (a label
+ * inside a button counts), [clickable] the node a click goes to ([node] itself or its nearest
+ * clickable ancestor). Both are fresh from the live tree.
+ */
+data class PressNode(val node: UiNode, val clickable: UiNode)
+
+/** How a [PhoneHands] call ended. */
+enum class HandResult {
+    /** The action was performed. */
+    DONE,
+
+    /** Nothing in the active window matched (or there is no active window). */
+    NOT_FOUND,
+
+    /** The caller's check refused the node or the app it is in; nothing was done. */
+    REFUSED,
+
+    /** The node was found and allowed, but Android would not perform the action. */
+    FAILED,
+}
+
+/** A [PhoneHands.click]: its [result] and the node it found ([PressNode.node]'s centre is where a fallback tap goes). */
+data class Clicked(val result: HandResult, val target: PressNode?)
+
+/**
+ * Maya's hands: the accessibility service acting in the active window (rootInActiveWindow) for the
+ * action runner. Every call reads the live node tree afresh (nothing is kept between calls) and
+ * never reads into password fields or the text of editable ones. The `allow` checks get the
+ * package of the active window and the node, read in the same pass as the action, so a refusal
+ * cannot be raced. Nothing read here is logged. Called on the main thread.
+ */
+interface PhoneHands {
+    /** The package of the active window right now, or null when there is none. */
+    fun activePackage(): String?
+
+    /** The button [target] means in the active window (core matchLabel over the live tree), or null. */
+    fun findButton(target: String): PressNode?
+
+    /**
+     * Finds [target] again and, when [allow] accepts the active window's package and the button,
+     * clicks it: `ACTION_CLICK` on its clickable node, then on the clickable ancestors above that.
+     */
+    fun click(target: String, allow: (String?, PressNode) -> Boolean): Clicked
+
+    /** A tap gesture at ([x], [y]) in screen pixels; [onDone] gets whether it completed. False if it could not be sent. */
+    fun tap(x: Int, y: Int, onDone: (Boolean) -> Unit): Boolean
+
+    /**
+     * The text field to type into: the focused editable field, else the editable field whose hint
+     * or description matches [into]. Never a password field.
+     */
+    fun findField(into: String?): UiNode?
+
+    /** Finds the field again ([findField]) and, when [allow] accepts, sets its text to [text] (ACTION_SET_TEXT). */
+    fun setText(into: String?, text: String, allow: (String?, UiNode) -> Boolean): HandResult
+
+    /** Scrolls the largest scrollable node of the active window forward ([forward]) or backward, when [allow] accepts the package. */
+    fun scroll(forward: Boolean, allow: (String?) -> Boolean): HandResult
+}
+
 /** A screenshot JPEG never exceeds this many bytes (base64 ~533 000 chars; the brain drops more than 600 000). */
 const val MAX_SCREENSHOT_BYTES = 400_000
 
@@ -75,7 +137,7 @@ data class GlanceData(val packageName: String, val app: String, val lines: List<
  * Process-local hand-off between [MayaAccessibilityService] and MayaService, like
  * [NotificationBridge]. The service sets [sink] while it runs with "Let Maya read my screen" on
  * and clears it (only if still its own) when it stops; without a sink the accessibility service
- * reads nothing. The accessibility service sets [service] while it is connected. Both are only
+ * reads nothing. The accessibility service sets [service] and [hands] while it is connected. All are only
  * used on the main thread.
  */
 object ScreenBridge {
@@ -84,6 +146,10 @@ object ScreenBridge {
 
     @Volatile
     var service: GlanceSource? = null
+
+    /** The accessibility service's hands (press, type, scroll), while it is connected. */
+    @Volatile
+    var hands: PhoneHands? = null
 
     /**
      * Set by MayaService: false while her overlay is not up (hidden from the notification, not
