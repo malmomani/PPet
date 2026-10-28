@@ -151,7 +151,7 @@ platform scrolled/vanished; the user tapped her off a tease target. Not queued.
 - New names: `jump`, `fall`, `perch`, `poke`, `tease`.
 - Core fallback map used when the sprite pack lacks a row: `jump→surprised`, `fall→surprised`,
   `perch→sit`, `poke→wave`, `tease→happy`; anything else unknown → `idle`.
-- `art/maya/ROAMING_ART_BRIEF.md` describes the new rows (same 64×64 grid, palette, facing right).
+- `art/maya/MISSING_POSES_BRIEF.md` describes the new rows (same 64×64 grid, palette, facing right).
 
 ### 4.8 Body reports
 - `BodyReporter` (pure core) turns behavior state into `body` events per §3 (change detection,
