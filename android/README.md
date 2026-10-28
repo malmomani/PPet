@@ -133,7 +133,7 @@ With **Screen access** on and **Let Maya read my screen** on, Maya can also *loo
 - **When you ask**, for example "look at this" (typed or spoken): she looks within a second, at most once every 20 seconds. If she isn't allowed to look right then, she tells you she couldn't see it.
 - While she waits for what she makes of it, she holds a "looking" pose.
 
-She never looks while she is hidden (from the notification), while the keyboard is open (so never while you type a password), on the lock screen or the notification shade, at Android's Settings or her own settings, or in apps in the **Never watch these apps** list (and anything with "bank" in its package name).
+She never looks while she is hidden (from the notification), while the keyboard is open (so never while you type a password), on the lock screen or the notification shade, at Android's Settings or her own settings, or while an app in the **Never watch these apps** list (or anything with "bank" in its package name) is anywhere on screen, split screen included.
 
 **Privacy.** The screenshot is shrunk (at most 1024 pixels on its long side) and only ever held in memory: it is never saved on the phone or the PC and never written to a log. It goes to your PC once, the PC's vision model describes it, and the picture is thrown away. Only a short description (at most 160 characters) stays in Maya's memory. If your PC brain uses an online AI service instead of a local one, the screenshot goes to that service; see the brain guide. Maya herself is in the screenshot (she's on top of the app); the PC is told to ignore her. To stop it, switch off **Let Maya read my screen** or turn Maya off in **Accessibility**.
 
@@ -149,7 +149,7 @@ Some banking apps refuse to open, or close themselves, while Maya is running. Th
 2. Switch it on and pick **Maya**.
 3. Before opening the bank, press and hold **both volume keys** for 3 seconds: Screen access turns off (Android tells you). Do the same after banking to turn it back on.
 
-While Screen access is off, Maya only walks along the bottom of the screen and doesn't read or look at anything.
+While Screen access is off, Maya only walks along the bottom of the screen and doesn't read or look at anything. She still steps away from do-not-watch apps, but only if **Usage access** is granted, and only within about 5 seconds of the app opening (Usage access is checked every 5 seconds).
 
 ## Troubleshooting
 
@@ -179,6 +179,6 @@ Maya's pictures live in `android/app/src/main/assets/sprites/`:
 - `maya.png`: one sheet with one row per animation.
 - `sprites.json`: describes the sheet: `frameWidth`/`frameHeight` (or `frame_w`/`frame_h`), and for each animation its `row`, number of `frames`, `fps` and whether it `loop`s.
 
-The current art is the 64×64 Maya pack (12 animations); its sources, PSD, palette and preview live in `art/maya/`. To use new art, replace those two files keeping the animation names: idle, walk, sit, nap, wave, peek, happy, sulk, surprised, plus talk (while her voice plays), listen (while you hold her to talk) and think (while she works on a reply). Optional rows the app uses when present (otherwise it shows the row in brackets): jump and fall (surprised), perch (sit), poke (wave), tease (happy), look (think; after she took a screenshot), ask (listen), type (poke) and held (surprised; while you drag her). She's drawn at a whole-number scale about 64 dp tall.
+The current art is the 64×64 Maya pack (12 animations); its sources, PSD, palette and preview live in `art/maya/`. To use new art, replace those two files keeping the animation names: idle, walk, sit, nap, wave, peek, happy, sulk, surprised, plus talk (while her voice plays), listen (while you hold her to talk) and think (while she works on a reply). Optional rows the app uses when present (otherwise it shows the row in brackets, following the brackets further if that row is missing too, then idle): jump and fall (surprised), perch (sit), poke (wave), tease (happy), look (think; after she took a screenshot), ask (listen), type (poke) and held (surprised; while you drag her). She's drawn at a whole-number scale about 64 dp tall.
 
 Then commit and push (the phone only gets new art from a new APK). The **android** workflow builds one; download and install it as in steps 1 and 2. It installs over the old one and keeps your settings.

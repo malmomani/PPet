@@ -49,7 +49,7 @@ class SpriteConfigTest {
         assertEquals(0, c.spec("moonwalk").row)
         assertEquals(8, c.spec("held").row) // held -> surprised
         assertEquals(0, c.spec("look").row) // think missing: idle
-        assertEquals(0, c.spec("type").row) // one level only: poke's own fallback (wave) is not followed
+        assertEquals(4, c.spec("type").row) // chain: type -> poke (missing) -> wave
         val withPoses = parseSpriteConfig("""{"frame_w":64,"frame_h":64,"animations":{"idle":${anim(0)},""" +
             """"listen":${anim(10)},"think":${anim(11)},"poke":${anim(12)}}}""")
         assertEquals(11, withPoses.spec("look").row)

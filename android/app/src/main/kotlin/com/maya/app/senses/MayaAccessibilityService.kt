@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.util.Base64
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
@@ -30,6 +31,9 @@ import com.maya.core.UiNode
 import com.maya.core.buildLayout
 import com.maya.core.extractLines
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import kotlin.math.roundToInt
 
 /**
@@ -73,8 +77,12 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
     private var metrics: SpriteMetrics? = null
     private var metricsDensity = 0f
 
+    /** Decodes and encodes screenshots off the main thread; null until connected and after onDestroy. */
+    private var encoder: ExecutorService? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+        if (encoder?.isShutdown != false) encoder = Executors.newSingleThreadExecutor()
         ScreenBridge.service = this
         refresh()
     }
@@ -107,6 +115,8 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
 
     override fun onDestroy() {
         detach()
+        encoder?.shutdown()
+        encoder = null
         super.onDestroy()
     }
 
@@ -135,15 +145,87 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
         }
     }
 
-    override fun screenshot(onResult: (ByteArray?) -> Unit) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+    override fun screenshot(pkg: String, onResult: (String?) -> Unit) {
+        val executor = encoder
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || executor == null) {
             onResult(null)
             return
         }
-        Screenshots.take(this, onResult)
+        Screenshots.take(this, pkg, executor, onResult)
     }
 
     override fun appName(pkg: String): String = labels.getOrPut(pkg) { clampAppName(labelOf(pkg), pkg) }
+
+    override fun blockedAppVisible(): Boolean {
+        val sink = ScreenBridge.sink ?: return false
+        bindTo(sink)
+        return appWindowPackages()?.any { it != null && doNotWatch.isBlocked(it) } ?: false
+    }
+
+    override fun frontApp(): String? {
+        if (ScreenBridge.sink == null) return null
+        return appWindowPackages()?.firstOrNull { it != null && it != packageName }
+    }
+
+    /**
+     * Live check right before (and right after) a screenshot: [pkg] is readable and is the active
+     * window, and no visible app window belongs to a do-not-watch app, Settings, system UI or Maya
+     * (or to an app whose window can't be identified).
+     */
+    internal fun mayCapture(pkg: String): Boolean {
+        val sink = ScreenBridge.sink ?: return false
+        bindTo(sink)
+        return try {
+            if (!readable(pkg)) return false
+            val root = rootInActiveWindow ?: return false
+            val active = try {
+                root.packageName?.toString()
+            } finally {
+                release(root)
+            }
+            if (active != pkg) return false
+            val apps = appWindowPackages() ?: return false
+            apps.none { it == null || it == packageName || it in NEVER_CAPTURE || doNotWatch.isBlocked(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not check the windows: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /**
+     * Packages of the visible app windows (split screen panes, pop-up activities), topmost first;
+     * an entry is null when a window's package can't be read. Null when the window list is not
+     * available. Reads nothing but each window's package name.
+     */
+    private fun appWindowPackages(): List<String?>? {
+        val list: List<AccessibilityWindowInfo> = try {
+            windows
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        val out = ArrayList<String?>()
+        try {
+            for (w in list.sortedByDescending { it.layer }) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val root = w.root
+                if (root == null) {
+                    out.add(null)
+                    continue
+                }
+                try {
+                    out.add(root.packageName?.toString())
+                } finally {
+                    release(root)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not list the windows: ${e.javaClass.simpleName}")
+            return null
+        } finally {
+            for (w in list) release(w)
+        }
+        return out
+    }
 
     private fun detach() {
         main.removeCallbacks(layoutTask)
@@ -365,6 +447,8 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource {
     private companion object {
         const val TAG = "MayaScreen"
         const val SYSTEM_UI = "com.android.systemui"
+        /** Never in a screenshot (besides do-not-watch apps and Maya herself). */
+        val NEVER_CAPTURE = setOf(SYSTEM_UI, "com.android.settings")
         const val MAX_NODES = 600
         const val LAYOUT_GAP_MS = 500L
         const val MIN_IMAGE_DP = 48f
@@ -386,14 +470,40 @@ private object Screenshots {
     private const val QUALITY_STEP = 10
 
     /**
-     * Asks the system for a screenshot of the default display; [onResult] gets the JPEG or null,
-     * once, on the main thread. The system allows about one per second: a refusal (e.g.
-     * ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) is a failure.
+     * Asks the system for a screenshot of the default display while [pkg] may be captured
+     * ([MayaAccessibilityService.mayCapture], checked before asking and again before decoding);
+     * [onResult] gets the base64 JPEG or null, once, on the main thread. Decoding, scaling and
+     * encoding run on [executor]. The system allows about one screenshot per second: a refusal
+     * (e.g. ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT) is a failure.
      */
-    fun take(service: AccessibilityService, onResult: (ByteArray?) -> Unit) {
+    fun take(
+        service: MayaAccessibilityService,
+        pkg: String,
+        executor: ExecutorService,
+        onResult: (String?) -> Unit,
+    ) {
+        if (!service.mayCapture(pkg)) {
+            onResult(null)
+            return
+        }
+        val main = service.mainExecutor
         val callback = object : AccessibilityService.TakeScreenshotCallback {
             override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                onResult(encode(screenshot))
+                // The screen may have changed while the system took it: check again before decoding.
+                if (!service.mayCapture(pkg)) {
+                    closeQuietly(screenshot)
+                    onResult(null)
+                    return
+                }
+                try {
+                    executor.execute {
+                        val image = encode(screenshot)
+                        main.execute { onResult(image) }
+                    }
+                } catch (e: RejectedExecutionException) {
+                    closeQuietly(screenshot)
+                    onResult(null)
+                }
             }
 
             override fun onFailure(errorCode: Int) {
@@ -409,8 +519,19 @@ private object Screenshots {
         }
     }
 
-    /** Hardware buffer -> software bitmap -> scaled -> JPEG of at most [MAX_SCREENSHOT_BYTES]; null on failure. */
-    private fun encode(shot: AccessibilityService.ScreenshotResult): ByteArray? {
+    private fun closeQuietly(shot: AccessibilityService.ScreenshotResult) {
+        try {
+            shot.hardwareBuffer.close()
+        } catch (e: Exception) {
+            // Already closed.
+        }
+    }
+
+    /**
+     * Hardware buffer -> software bitmap -> scaled -> JPEG of at most [MAX_SCREENSHOT_BYTES] ->
+     * base64; null on failure. Runs on the encoder thread; always closes the buffer.
+     */
+    private fun encode(shot: AccessibilityService.ScreenshotResult): String? {
         val buffer = shot.hardwareBuffer
         var hardware: Bitmap? = null
         var software: Bitmap? = null
@@ -422,7 +543,7 @@ private object Screenshots {
             hardware = null
             buffer.close()
             scaled = scaleDown(software)
-            compress(scaled)
+            compress(scaled)?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
         } catch (e: Exception) {
             Log.w(TAG, "could not encode the screenshot: ${e.javaClass.simpleName}")
             null

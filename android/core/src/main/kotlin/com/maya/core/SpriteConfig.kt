@@ -9,7 +9,7 @@ import kotlinx.serialization.json.jsonObject
 
 /**
  * Rows used for animation names a sprite pack may not have yet (the roaming art comes later):
- * [SpriteConfig.spec] shows the fallback's row instead, and `idle` when that is missing too.
+ * [SpriteConfig.spec] follows the fallbacks until a row exists, and shows `idle` when none does.
  */
 val ANIMATION_FALLBACKS: Map<String, String> = mapOf(
     "jump" to "surprised",
@@ -31,9 +31,19 @@ data class SpriteConfig(
     val frameH: Int,
     val animations: Map<String, AnimSpec>,
 ) {
-    /** Spec for [name]: its own row, else its [ANIMATION_FALLBACKS] row, else `idle`. */
-    fun spec(name: String): AnimSpec =
-        animations[name] ?: ANIMATION_FALLBACKS[name]?.let { animations[it] } ?: animations.getValue("idle")
+    /**
+     * Spec for [name]: its own row, else the first row along its [ANIMATION_FALLBACKS] chain
+     * (e.g. `type` -> `poke` -> `wave`), else `idle`.
+     */
+    fun spec(name: String): AnimSpec {
+        val seen = HashSet<String>()
+        var current: String? = name
+        while (current != null && seen.add(current)) {
+            animations[current]?.let { return it }
+            current = ANIMATION_FALLBACKS[current]
+        }
+        return animations.getValue("idle")
+    }
 }
 
 /**

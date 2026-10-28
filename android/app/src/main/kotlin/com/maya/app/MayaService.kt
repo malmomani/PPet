@@ -19,7 +19,6 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import com.maya.app.overlay.OverlayBody
@@ -131,9 +130,10 @@ class MayaService : Service() {
     private var lookScheduler: LookScheduler? = null
     /** The screenshot in flight, if any. */
     private var shot: Shot? = null
-    /** The app and line count of the latest glance taken (for the picture-heavy rule). */
+    /** The app, line count and time of the latest glance taken (for the picture-heavy rule). */
     private var lastGlancePkg: String? = null
     private var lastGlanceLines = 0
+    private var lastGlanceMs = 0L
     private val shotTimeout = Runnable { shotFailed() }
     private val glanceTick = object : Runnable {
         override fun run() {
@@ -272,6 +272,7 @@ class MayaService : Service() {
         if (screenLayoutPkg != null) body.setScreenLayout(screenLayout, screenKeyboardTop, screenRestricted, ownLayout())
         overlayBody = body
         overlay = body
+        probeFront()
         if (!autoHidden) body.show()
         updateScreenActive()
     }
@@ -280,6 +281,7 @@ class MayaService : Service() {
     private fun toggleHidden() {
         overlayHidden = !overlayHidden
         updateNotification() // the action now reads Show / Hide
+        if (!overlayHidden) probeFront() // the app in front may have changed while she was hidden
         applyVisibility()
     }
 
@@ -297,15 +299,44 @@ class MayaService : Service() {
 
     /**
      * The app in front changed (from the screen sense or the app-usage sense, whichever noticed
-     * last). A do-not-watch app makes her step away; any other app brings her back. Maya's own
-     * windows and the system UI (notification shade) change nothing.
+     * last). A do-not-watch app makes her step away; she comes back once no do-not-watch app
+     * window is visible any more (split screen, an autofill or fingerprint pop-up over the bank
+     * keep her away). Maya's own windows and the system UI (notification shade) change nothing.
      */
     private fun onFrontApp(pkg: String?) {
         if (!running || pkg == null || pkg == packageName || pkg == SYSTEM_UI) return
-        val away = doNotWatch.isBlocked(pkg)
+        setAway(doNotWatch.isBlocked(pkg) || screenSource()?.blockedAppVisible() == true)
+    }
+
+    private fun setAway(away: Boolean) {
         if (away == autoHidden) return
         autoHidden = away
         applyVisibility()
+    }
+
+    /** The accessibility service, while the screen sense is on. */
+    private fun screenSource() = if (screenSink != null) ScreenBridge.service else null
+
+    /**
+     * Before she shows: which app is in front right now? The topmost app window (screen sense),
+     * else the app-usage sense's app; if neither can tell, she shows.
+     */
+    private fun probeFront() {
+        val source = screenSource()
+        val top = source?.frontApp()
+        autoHidden = if (top != null) {
+            doNotWatch.isBlocked(top) || source.blockedAppVisible()
+        } else {
+            appUsage?.foregroundPackage()?.let { doNotWatch.isBlocked(it) } ?: false
+        }
+    }
+
+    /** While she is away: back as soon as no do-not-watch window is visible (no app change needed). */
+    private fun recheckAway() {
+        if (!autoHidden) return
+        val source = screenSource() ?: return
+        val top = source.frontApp() ?: return
+        setAway(doNotWatch.isBlocked(top) || source.blockedAppVisible())
     }
 
     // ---- senses ----
@@ -413,6 +444,7 @@ class MayaService : Service() {
     private fun onGlanceTick() {
         val scheduler = glanceScheduler ?: return
         if (ScreenBridge.service == null && screenLayoutPkg != null) forgetScreen(scheduler)
+        recheckAway()
         val layoutPkg = screenLayoutPkg
         if (layoutPkg != null) {
             val restricted = isRestricted(layoutPkg, screenKeyboardTop)
@@ -435,6 +467,7 @@ class MayaService : Service() {
         if (doNotWatch.isBlocked(g.packageName)) return
         lastGlancePkg = g.packageName
         lastGlanceLines = g.lines.size
+        lastGlanceMs = now
         if (scheduler.taken(g.packageName, g.lines, now)) emit(Glance(g.packageName, g.app, g.lines, g.targets))
     }
 
@@ -466,8 +499,9 @@ class MayaService : Service() {
         val pkg = lookablePkg() ?: return
         if (shot != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val (w, h) = realScreenSize(this)
-        // Lines of the latest glance of this app; unknown (no glance of it yet): only the area rule.
-        val lines = if (lastGlancePkg == pkg) lastGlanceLines else Int.MAX_VALUE
+        // Lines of a recent glance of this app; unknown (none in the last minute): only the area rule.
+        val fresh = lastGlancePkg == pkg && now - lastGlanceMs <= GLANCE_LINES_MAX_AGE_MS
+        val lines = if (fresh) lastGlanceLines else Int.MAX_VALUE
         val heavy = isPictureHeavy(screenLayout.images, w, h, lines)
         if (looks.autoDue(pkg, heavy, allowed = true, nowMs = now)) takeShot(pkg, asked = false)
     }
@@ -505,34 +539,29 @@ class MayaService : Service() {
         val s = Shot(pkg, asked)
         shot = s
         main.postDelayed(shotTimeout, SHOT_TIMEOUT_MS)
-        source.screenshot { bytes -> onShot(s, bytes) }
+        source.screenshot(pkg) { image -> onShot(s, image) }
     }
 
     /**
-     * The screenshot [s] came back ([bytes] null: it failed). Sent as a sight if she may still look
-     * at the same app; the bytes are only ever held here, in memory.
+     * The screenshot [s] came back as base64 JPEG ([image] null: it failed or the screen could not
+     * be captured). Sent as a sight if she may still look at the same app; held only in memory.
      */
-    private fun onShot(s: Shot, bytes: ByteArray?) {
-        try {
-            if (shot !== s) return // timed out, or the screen sense stopped meanwhile
-            shot = null
-            main.removeCallbacks(shotTimeout)
-            if (!running) return
-            if (bytes == null) {
-                if (s.asked) emit(SightFailed("error"))
-                return
-            }
-            val source = ScreenBridge.service
-            if (lookablePkg() != s.pkg || source == null) {
-                if (s.asked) emit(SightFailed("blocked"))
-                return
-            }
-            val image = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            emit(Sight(s.pkg, source.appName(s.pkg), if (s.asked) "asked" else "auto", image))
-            overlayBody?.lookedAtScreen()
-        } finally {
-            bytes?.fill(0)
+    private fun onShot(s: Shot, image: String?) {
+        if (shot !== s) return // timed out, or the screen sense stopped meanwhile
+        shot = null
+        main.removeCallbacks(shotTimeout)
+        if (!running) return
+        if (image == null) {
+            if (s.asked) emit(SightFailed("error"))
+            return
         }
+        val source = ScreenBridge.service
+        if (lookablePkg() != s.pkg || source == null) {
+            if (s.asked) emit(SightFailed("blocked"))
+            return
+        }
+        emit(Sight(s.pkg, source.appName(s.pkg), if (s.asked) "asked" else "auto", image))
+        overlayBody?.lookedAtScreen()
     }
 
     /** No answer from the system in time: an asked look failed. */
@@ -557,6 +586,10 @@ class MayaService : Service() {
         screenKeyboardTop = null
         screenRestricted = false
         overlay?.setScreenLayout(Layout.EMPTY, null, false, false)
+        // The screen sense is gone: whether she stays away is now up to the app-usage sense.
+        val wasAway = autoHidden
+        probeFront()
+        if (autoHidden != wasAway) applyVisibility()
     }
 
     /** On every connect: fresh glance memory, and a glance at the current app soon. */
@@ -720,6 +753,8 @@ class MayaService : Service() {
         private const val GLANCE_TICK_MS = 1000L
         /** An asked look the system has not answered within this long has failed. */
         private const val SHOT_TIMEOUT_MS = 3000L
+        /** A glance's line count counts for the picture-heavy rule this long. */
+        private const val GLANCE_LINES_MAX_AGE_MS = 60_000L
         private const val SYSTEM_UI = "com.android.systemui"
         /** Never looked at (besides do-not-watch apps and Maya herself). */
         private val NEVER_LOOK = setOf(SYSTEM_UI, "com.android.settings")

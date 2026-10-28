@@ -29,18 +29,30 @@ interface GlanceSource {
     fun refresh()
 
     /**
-     * A screenshot of the whole screen as JPEG bytes (long side at most 1024 px, at most
-     * [MAX_SCREENSHOT_BYTES]), or null when it failed or the phone is older than Android 11.
-     * [onResult] is called once, on the main thread. The bytes live only in memory: never written
-     * to disk, never logged. The caller decides whether the screen may be looked at.
+     * A screenshot of the whole screen while [pkg] is in front, as base64 JPEG (long side at most
+     * 1024 px, at most [MAX_SCREENSHOT_BYTES] before base64), or null when it failed, the phone is
+     * older than Android 11, or the screen may not be captured (checked live right before the
+     * screenshot and again before it is decoded: [pkg] must be the active window and no
+     * do-not-watch app, Settings, system UI or Maya window may be visible). [onResult] is called
+     * once, on the main thread; decoding and encoding run on a background thread. The image lives
+     * only in memory: never written to disk, never logged.
      */
-    fun screenshot(onResult: (ByteArray?) -> Unit)
+    fun screenshot(pkg: String, onResult: (String?) -> Unit)
 
     /** The app's label for [pkg] (1–100 chars; the package name when it has none). */
     fun appName(pkg: String): String
+
+    /**
+     * True while any visible app window (split screen, a pop-up over another app) belongs to a
+     * do-not-watch app. Only the windows' package names are looked at.
+     */
+    fun blockedAppVisible(): Boolean
+
+    /** The package of the topmost visible app window other than Maya's own, or null when it can't tell. */
+    fun frontApp(): String?
 }
 
-/** A screenshot JPEG never exceeds this (base64 ~533 000 chars; the brain drops more than 600 000). */
+/** A screenshot JPEG never exceeds this many bytes (base64 ~533 000 chars; the brain drops more than 600 000). */
 const val MAX_SCREENSHOT_BYTES = 400_000
 
 /** The full screen size in px (width, height) of the default display in its current rotation. */

@@ -86,6 +86,12 @@ class AppUsageSense(
         }
     }
 
+    /**
+     * The raw foreground package as of the last poll (do-not-watch apps and home screens
+     * included), or null when unknown or it is Maya's own.
+     */
+    fun foregroundPackage(): String? = foreground?.takeIf { it != ownPackage }
+
     /** The app Maya currently sees in the foreground (package, label), if any. */
     fun currentApp(): Pair<String, String>? {
         val pkg = tracker.current() ?: return null
