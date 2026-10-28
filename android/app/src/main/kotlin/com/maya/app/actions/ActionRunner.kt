@@ -75,8 +75,8 @@ interface ActionBody {
  * system kinds through Android APIs, press/type/scroll through the accessibility service
  * ([hands]), checking again in the same pass as the click or the typing. A yes is bound to what
  * was asked about: if the button or field found afterwards is not the same one, it fails
- * ("screen changed"). A press walks her body to the button first ([body]). An app she starts
- * must be in front 1.5 s later ([frontApp]). Never logs what is typed, searched or read on screen.
+ * ("screen changed"). A press walks her body to the button first ([body]). An app she opens
+ * (open_app) must be in front 1.5 s later ([frontApp]). Never logs what is typed, searched or read on screen.
  * Main thread only.
  */
 class ActionRunner(
@@ -513,16 +513,17 @@ class ActionRunner(
         return startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
-    /** The phone's web search; without one, Google in the browser. */
+    /**
+     * The phone's web search; without one, Google in the browser. Not checked for coming to the
+     * front: the app that ends up showing the results varies (one may hand the search to another).
+     */
     private fun webSearch(query: String): Outcome {
         val pm = context.packageManager
         val search = Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, query)
         val view = Intent(Intent.ACTION_VIEW, Uri.parse(GOOGLE_SEARCH + Uri.encode(query)))
         val intent = if (search.resolveActivity(pm) != null) search else view
-        val handler = intent.resolveActivity(pm) ?: return Outcome("no browser")
-        // A chooser ("android") can't be checked: the app picked from it is unknown.
-        val launched = handler.packageName.takeIf { it != ANDROID_PACKAGE }
-        return Outcome(startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)), launched)
+        if (intent.resolveActivity(pm) == null) return Outcome("no browser")
+        return Outcome(startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)))
     }
 
     /**
@@ -565,7 +566,6 @@ class ActionRunner(
         private const val PRESS_LABEL_MAX = 30
         private const val TYPE_PREVIEW_MAX = 60
         private const val GOOGLE_SEARCH = "https://www.google.com/search?q="
-        private const val ANDROID_PACKAGE = "android"
         /** A started app must be in front this long after the start, else Android blocked it. */
         private const val LAUNCH_CHECK_MS = 1500L
         /** A button is still the one asked about when every edge moved at most this far. */
