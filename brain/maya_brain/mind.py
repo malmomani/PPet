@@ -7,6 +7,7 @@ import random
 import sqlite3
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 from .clock import Clock
 from .config import Config
@@ -16,7 +17,10 @@ from .llm import LLM, LLMError
 from .memory import Memory
 from .persona import Persona
 from .protocol import (
+    Act,
+    ActChoice,
     Action,
+    ActResultEvent,
     Animate,
     AppClosed,
     AppOpened,
@@ -26,12 +30,15 @@ from .protocol import (
     Event,
     GlanceEvent,
     Hello,
+    Look,
     Move,
     NotificationEvent,
     OfflineSummary,
     ProtocolError,
     Say,
     Screen,
+    SightEvent,
+    SightFailedEvent,
     State,
     TEASE_INTENTS,
     Typing,
@@ -39,11 +46,13 @@ from .protocol import (
     UserMessage,
     UserShush,
     UserTap,
+    is_risky,
     parse_event,
 )
 from .reflection import Reflection
-from .thinker import BODY_QUIET_DETAIL, Context, Thinker, Thought, describe_body
+from .thinker import BODY_QUIET_DETAIL, DIRECT_TRIGGERS, LOOK_TRIGGER, Context, Thinker, Thought, describe_body
 from .tts import TTS, TTSError, speakable
+from .vision import Describer
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +70,11 @@ TEASE_TIERS = {"friend", "close"}
 TEASE_MOODS = {"happy", "curious", "excited"}
 BODY_THOUGHT_EVERY_S = (120, 240)
 BODY_CHAT_QUIET = timedelta(seconds=60)  # no silent body thought this soon after the user talked to or tapped her
+ACT_TIERS = {"friend", "close"}  # tiers that may do things on the phone by themselves
+SIGHT_LINE_MAX = 160
+SUMMARY_PART_MAX = 40
+PENDING_ACTS_MAX = 20  # acts still waiting for their act_result
+COULDNT_SEE = "You tried to look at the screen but couldn't see it."
 
 
 def bubble_ms(text: str) -> int:
@@ -99,6 +113,70 @@ def _glance_headline(lines: list[str]) -> str:
     return lines[0][:120].rstrip()
 
 
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _timer_length(seconds: int) -> str:
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}-hour"
+    if seconds % 60 == 0:
+        return f"{seconds // 60}-minute"
+    return f"{seconds}-second"
+
+
+_MEDIA_WORDS = {
+    "play_pause": "play or pause the music",
+    "next": "skip to the next song",
+    "previous": "go back to the previous song",
+}
+_VOLUME_WORDS = {"up": "turn the volume up", "down": "turn the volume down", "mute": "mute the sound"}
+
+
+def summarize(act: Act) -> str:
+    """What an act does, as words that follow "you ..." (e.g. `set a 10-minute timer`)."""
+    if act.kind == "open_app":
+        return f"open {act.app}"
+    if act.kind == "media":
+        return _MEDIA_WORDS[act.key]
+    if act.kind == "timer":
+        text = f"set a {_timer_length(act.seconds)} timer"
+        return text + (f' for "{act.label}"' if act.label else "")
+    if act.kind == "alarm":
+        text = f"set an alarm for {act.hour:02d}:{act.minute:02d}"
+        return text + (f' for "{act.label}"' if act.label else "")
+    if act.kind == "volume":
+        return _VOLUME_WORDS[act.dir]
+    if act.kind == "web_search":
+        return f'search the web for "{_clip(act.query, SUMMARY_PART_MAX)}"'
+    if act.kind == "scroll":
+        return f"scroll {act.dir}"
+    if act.kind == "press":
+        return f"press {act.target}"
+    text = f'type "{_clip(act.text, SUMMARY_PART_MAX)}"'
+    return text + (f" into {act.into}" if act.into else "")
+
+
+def _act_result_line(act: Act, event: ActResultEvent) -> str:
+    summary = summarize(act)
+    if event.status == "done":
+        return f"you {summary}"
+    if event.status == "declined":
+        return f"the user said no to {summary}"
+    if event.status == "timeout":
+        return f"the user didn't answer when you asked to {summary}"
+    return f"you couldn't {summary}" + (f" ({event.detail})" if event.detail else "")
+
+
+class SeenScreen(NamedTuple):
+    """The latest screenshot she saw, as words (RAM only)."""
+
+    app: str
+    description: str
+    at: datetime
+    package: str
+
+
 def _moment_line(event: BodyMomentEvent) -> str:
     if event.kind == "fell":
         return "you fell when the screen moved under you"
@@ -116,9 +194,13 @@ class Mind:
         clock: Clock,
         sink: ActionSink | None = None,
         tts: TTS | None = None,
+        describer: Describer | None = None,
     ) -> None:
         self.cfg = cfg
         self.tts = tts
+        self.describer = describer
+        self.sight: SeenScreen | None = None  # the latest screenshot she saw, as words (RAM only)
+        self._acts: dict[str, Act] = {}  # acts sent to the phone, by id, until their act_result arrives
         self.voice_mode = "off"  # from the latest Hello: off | replies | always
         self._voice_reply = False  # True while handling a UserMessage that was spoken
         self._voice_task: asyncio.Task | None = None
@@ -174,6 +256,9 @@ class Mind:
     # ---- events ----
 
     async def handle(self, event: Event) -> None:
+        if isinstance(event, SightEvent):
+            await self.handle_sight(event)  # describes outside the lock
+            return
         async with self._lock:
             if isinstance(event, USER_ACTIVITY):
                 self._last_event = self.clock.now()
@@ -187,6 +272,9 @@ class Mind:
             if isinstance(event, UserTap):
                 await self._on_tap()
                 return
+            if isinstance(event, SightFailedEvent):
+                await self._respond(self._ctx(LOOK_TRIGGER, COULDNT_SEE))
+                return
             if isinstance(event, Hello):
                 self._screen_on = None
                 self.voice_mode = event.voice_mode
@@ -195,6 +283,7 @@ class Mind:
                 self._screen_on = event.on
                 if not event.on:
                     self._forget_glance()
+                    self.sight = None
             elif isinstance(event, UserDrag):
                 await self._on_drag(event)
             elif isinstance(event, UserShush):
@@ -204,9 +293,13 @@ class Mind:
             elif isinstance(event, AppOpened):
                 if self.glance is not None and self.glance.package != event.package:
                     self._forget_glance()
+                if self.sight is not None and self.sight.package != event.package:
+                    self.sight = None
             elif isinstance(event, AppClosed):
                 if self.glance is not None and self.glance.package == event.package:
                     self._forget_glance()
+                if self.sight is not None and self.sight.package == event.package:
+                    self.sight = None
                 if event.duration_s >= MIN_APP_USE_S:
                     self.memory.add_turn("event", f"User used {event.label} for {_fmt_use(event.duration_s)}")
             elif isinstance(event, NotificationEvent):
@@ -220,9 +313,49 @@ class Mind:
             elif isinstance(event, BodyMomentEvent):
                 if event.kind != "fell" or fall_counts:
                     self.memory.add_turn("event", _moment_line(event))
+            elif isinstance(event, ActResultEvent):
+                self._on_act_result(event)
             elif isinstance(event, OfflineSummary):
                 self._on_offline_summary(event)
             await self._maybe_initiate()
+
+    async def handle_sight(self, event: SightEvent) -> None:
+        """A screenshot: described by the vision model outside the lock (chat goes on meanwhile), then seen.
+
+        The picture is dropped as soon as it is described; nothing about it is logged.
+        """
+        image, event.image_b64 = event.image_b64, ""
+        description = None
+        if self.describer is not None:
+            try:
+                description = await self.describer.describe(image)
+            except Exception as e:  # a describer should not raise; whatever it was, she just didn't see
+                log.warning("describing a screenshot failed: %s", type(e).__name__)
+        del image
+        await self.see(event.package, event.app, event.reason, description)
+
+    async def see(self, package: str, app: str, reason: str, description: str | None) -> None:
+        """What she saw on the screen (None: she couldn't make it out). An asked look gets an answer."""
+        async with self._lock:
+            if description is None:
+                if reason == "asked":
+                    await self._respond(self._ctx(LOOK_TRIGGER, COULDNT_SEE))
+                return  # an auto look that failed is simply forgotten
+            self.sight = SeenScreen(app, description, self.clock.now(), package)
+            self.memory.add_turn("event", _clip(f"you looked at {app}: {description}", SIGHT_LINE_MAX))
+            if reason == "asked":
+                detail = f"You looked at the screen as the user asked. You saw: {description}"
+                await self._respond(self._ctx(LOOK_TRIGGER, detail))
+                return
+            self.initiative.sighted(app)
+            await self._maybe_initiate()
+
+    def _on_act_result(self, event: ActResultEvent) -> None:
+        act = self._acts.pop(event.act_id, None)
+        if act is None:
+            log.debug("act_result for an unknown act")
+            return
+        self.memory.add_turn("event", _act_result_line(act, event))
 
     def _forget_glance(self) -> None:
         """The screen she last saw is gone (another app, the app closed, the screen off)."""
@@ -253,7 +386,7 @@ class Mind:
         if event.thrown:
             thought = await self._think(self._ctx("event", text))
             if thought is not None:
-                await self._apply(thought, closeness=True)
+                await self._apply(thought, "event", closeness=True)
 
     def _on_offline_summary(self, event: OfflineSummary) -> None:
         totals: dict[str, int] = {}  # insertion order = first-seen label order
@@ -304,7 +437,17 @@ class Mind:
             ctx.screen_app, ctx.screen_lines = self.glance.app, tuple(self.glance.lines)
             if self._tease_allowed():
                 ctx.tease_targets = tuple(self.glance.targets)
+        if trigger != LOOK_TRIGGER and self._sight_fresh():
+            ctx.sight = f"You saw on screen ({self.sight.app}): {self.sight.description}"
         return ctx
+
+    def _sight_fresh(self) -> bool:
+        """A sight counts while it is recent and the latest glance (if any) is of the same app."""
+        return (
+            self.sight is not None
+            and self.clock.now() - self.sight.at <= SCREEN_FRESH
+            and (self.glance is None or self.glance.app == self.sight.app)
+        )
 
     async def _think(self, ctx: Context) -> Thought | None:
         try:
@@ -324,9 +467,9 @@ class Mind:
             await self._emit(Typing(on=False))
         self.initiative.engaged()
         if thought is not None:
-            await self._apply(thought, closeness=True)
+            await self._apply(thought, ctx.trigger, closeness=True)
 
-    async def _apply(self, thought: Thought, closeness: bool = False) -> bool:
+    async def _apply(self, thought: Thought, trigger: str, closeness: bool = False) -> bool:
         """Apply a thought to emotion/memory and emit its actions. Returns whether Maya spoke.
 
         Closeness only moves for thoughts about something the user did to her (`closeness=True`);
@@ -334,6 +477,8 @@ class Mind:
         """
         before = (self.emotion.mood()[0], self.emotion.tier())
         tease_ok = self._tease_allowed()  # as offered to her in the prompt, before this thought changes her mood
+        own = trigger not in DIRECT_TRIGGERS and trigger != LOOK_TRIGGER  # not a reply to the user
+        act_ok = thought.act is not None and (not own or self._own_act_allowed(thought.act))
         if thought.mood:
             self.emotion.set_mood(thought.mood, thought.mood_intensity)
         if closeness:
@@ -346,9 +491,32 @@ class Mind:
             await self._say(thought.say)
         if thought.move is not None:
             await self._move(thought.move.intent, thought.move.target, tease_ok)
+        if act_ok:
+            await self._act(Act(**thought.act.fields()), own)
+        if thought.look and trigger in DIRECT_TRIGGERS:
+            # Only when the user is talking to her: the phone answers with an "asked" sight, which she replies to.
+            await self._emit(Look())
         if (self.emotion.mood()[0], self.emotion.tier()) != before:
             await self._emit_state()
         return spoke
+
+    def _own_act_allowed(self, act: ActChoice) -> bool:
+        """Her own idea to use the phone: only as a friend, while the user can see it, never risky, a few per hour."""
+        return (
+            self.emotion.tier() in ACT_TIERS
+            and self._can_be_heard()
+            and not is_risky(act)
+            and self.initiative.act_ready()  # not quiet hours, not shushed, under the hourly limit
+        )
+
+    async def _act(self, act: Act, own: bool) -> None:
+        self._acts[act.id] = act
+        while len(self._acts) > PENDING_ACTS_MAX:
+            del self._acts[next(iter(self._acts))]
+        if own:
+            self.initiative.acted()
+        log.info("act %s (%s)", act.kind, "her own idea" if own else "a reply")
+        await self._emit(act)
 
     async def _move(self, intent: str, target: str | None, tease_ok: bool) -> None:
         """Send a move to the body. Teases only when allowed and aimed at a button that is really on screen."""
@@ -414,7 +582,7 @@ class Mind:
         thought = await self._think(self._ctx("initiative", reason))
         spoke = False
         if thought is not None:
-            spoke = await self._apply(thought)
+            spoke = await self._apply(thought, "initiative")
         self.initiative.fired(spoke)
 
     # ---- periodic ----
@@ -457,7 +625,7 @@ class Mind:
             return  # stays due
         thought = await self._think(self._ctx("body", BODY_QUIET_DETAIL))
         if thought is not None:
-            await self._apply(thought)
+            await self._apply(thought, "body")
         self._schedule_body_thought(self.clock.now())
 
     def _schedule_body_thought(self, now: datetime) -> None:

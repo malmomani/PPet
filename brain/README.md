@@ -71,6 +71,8 @@ Type plain text to talk to Maya. Slash commands inject events on a virtual clock
 | `/glance <app> <line>[ \| <line>...] [targets=send,like]` | Pretend the user's screen shows these lines (and these buttons: `send like play search share comment follow`) |
 | `/body <doing> [where] [target]` | Report where Maya's body is (`/body perch platform`, `/body tease target send`) |
 | `/moment fell\|shooed [target]` | Her body: she fell, or the user shooed her off a button; `move` actions from the brain print as `[move] <intent> <target>` |
+| `/sight <app> <description>` | Pretend Maya sees this on the screen (no picture or vision model needed). It answers her last `[look]`, else it counts as a look of her own |
+| `/act_result <status> [detail]` | Answer her last `[act] <kind> <fields>` with `done`, `declined`, `timeout`, `failed` or `blocked` |
 | `/screen on\|off`, `/charge on\|off` | Screen and charger events |
 | `/time HH:MM` | Jump the virtual clock forward to the next HH:MM (today or tomorrow) |
 | `/skip 90m\|3h\|2d` | Advance the clock, letting Maya's periodic thinking run along the way |
@@ -175,6 +177,12 @@ It prints the `ws://<ip>:8765/ws` addresses the phone can use, and serves `/heal
 ## Phone app
 
 The Android app that shows Maya on your phone has its own install and pairing guide: see [`../android/README.md`](../android/README.md).
+
+## Seeing the screen and using the phone
+
+When the phone shows mostly pictures, or when you ask Maya to look ("look at this"), the app sends her a screenshot. The brain has the vision model (`[vision]` in `maya.toml`) describe it in a few words, without holding up the chat, and then drops the picture: it is never written to disk or logged. Maya keeps the description in mind for about 10 minutes and remembers "you looked at …" in her conversation history. If vision is off or fails, she simply doesn't see it (when you asked, she tells you).
+
+She can also do small things on the phone: open an app, play/pause or skip music, set a timer or an alarm, change the volume, search the web, scroll, press a button and type text. The phone's "Let Maya use my phone" switch is off by default, and the phone asks you first before anything risky (pressing send, buy, delete…, or typing). When you ask her, she just does it (the phone still asks about risky ones). On her own she only does harmless things, only once she is your friend, never in quiet hours or after you shushed her, and at most 10 times an hour. She remembers how each one went.
 
 ## Privacy
 

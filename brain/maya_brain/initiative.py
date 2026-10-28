@@ -45,6 +45,10 @@ FELL_GAP = timedelta(seconds=300)  # one fall counts (urge and memory) at most e
 SHOOED_BUMP = 10.0
 BODY_ACTIVE_WINDOW = timedelta(seconds=300)  # silent body thoughts only while the user is around
 TEASE_GAP = timedelta(seconds=600)
+SIGHT_BUMP = 5.0
+SIGHT_GAP = timedelta(seconds=300)  # an auto sight raises the urge at most every 5 min
+ACT_WINDOW = timedelta(hours=1)
+ACTS_PER_WINDOW = 10  # own-initiative phone actions per rolling hour
 
 # Events that mean the user is actually around. Hello, Charging, NotificationEvent, GlanceEvent, BodyEvent,
 # BodyMomentEvent and OfflineSummary are not.
@@ -106,6 +110,8 @@ class Initiative:
         self._glanced: str | None = s.get("glanced")  # when a glance last bumped the urge
         self._fell: str | None = s.get("fell")  # when a fall last counted
         self._last_tease: str | None = s.get("last_tease")  # when she last teased the user
+        self._sighted: str | None = s.get("sighted")  # when an auto sight last bumped the urge
+        self._acts: list[str] = s.get("acts", [])  # her own phone actions in the last hour
 
     # ---- persistence ----
 
@@ -131,6 +137,8 @@ class Initiative:
                 "glanced": self._glanced,
                 "fell": self._fell,
                 "last_tease": self._last_tease,
+                "sighted": self._sighted,
+                "acts": self._acts,
             },
         )
 
@@ -311,6 +319,31 @@ class Initiative:
 
     def teased(self) -> None:
         self._last_tease = self.clock.now().isoformat()
+        self._save()
+
+    def sighted(self, app: str) -> bool:
+        """She just saw something on screen by herself: bump the urge, at most once per SIGHT_GAP."""
+        now = self.clock.now()
+        last = _dt(self._sighted)
+        if last is not None and now - last < SIGHT_GAP:
+            return False
+        self._sighted = now.isoformat()
+        self._bump(SIGHT_BUMP, f"you just saw something on screen in {app}")
+        self._save()
+        return True
+
+    def _recent_acts(self, now: datetime) -> list[str]:
+        return [t for t in self._acts if now - datetime.fromisoformat(t) < ACT_WINDOW]
+
+    def act_ready(self) -> bool:
+        """May she do something on the phone by herself? Not hushed, and under the hourly limit."""
+        now = self.clock.now()
+        return not self._hushed(now) and len(self._recent_acts(now)) < ACTS_PER_WINDOW
+
+    def acted(self) -> None:
+        """She did something on the phone by herself (only the last hour is kept)."""
+        now = self.clock.now()
+        self._acts = self._recent_acts(now) + [now.isoformat()]
         self._save()
 
     def fired(self, spoke: bool) -> None:

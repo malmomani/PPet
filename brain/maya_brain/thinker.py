@@ -10,11 +10,22 @@ from .emotion import TIER_GUIDANCE, Emotion
 from .llm import LLM, extract_json
 from .memory import Memory
 from .persona import Persona
-from .protocol import ANIMATIONS, BODY_DOING, MOODS, MOVE_INTENTS, TEASE_INTENTS, TEASE_TARGETS, BodyEvent
+from .protocol import (
+    ANIMATIONS,
+    BODY_DOING,
+    MOODS,
+    MOVE_INTENTS,
+    TEASE_INTENTS,
+    TEASE_TARGETS,
+    ActChoice,
+    BodyEvent,
+)
 
 log = logging.getLogger(__name__)
 
 DIRECT_TRIGGERS = {"user_message", "user_tap"}
+LOOK_TRIGGER = "look"  # the answer to a look the user asked for: a reply, like a message
+REPLY_TRIGGERS = DIRECT_TRIGGERS | {LOOK_TRIGGER}  # she must say something
 LOG_REPLY_CHARS = 500
 
 MAX_SAY = 300
@@ -29,6 +40,17 @@ SELF_MODEL = (
 )
 
 BODY_QUIET_DETAIL = "A quiet moment. Decide what your body does next; you won't speak."
+
+LOOK_RULE = (
+    '- "look" (boolean): true to take a look at the user\'s screen (e.g. when they ask you to look at '
+    "something); you'll see it in a moment."
+)
+ACT_RULE = (
+    '- "act" (object or null): do something on the phone: {"kind": ..., fields}. Kinds: open_app {app}, '
+    "media {key: play_pause|next|previous}, timer {seconds 5-86400, label?}, alarm {hour, minute, label?}, "
+    "volume {dir: up|down|mute}, web_search {query}, scroll {dir: up|down}, press {target: a button's label}, "
+    "type {text, into?}. Risky ones (pressing send, buy, delete..., or typing) are confirmed by the user first."
+)
 
 _DOING_WORDS = {
     "idle": "standing",
@@ -95,6 +117,24 @@ class Thought(BaseModel):
     mood_intensity: float = 0.5
     closeness_delta: float = 0.0
     move: MoveChoice | None = None
+    look: bool = False
+    act: ActChoice | None = None
+
+    @field_validator("look", mode="before")
+    @classmethod
+    def _only_true(cls, v):
+        return v is True
+
+    @field_validator("act", mode="before")
+    @classmethod
+    def _valid_act(cls, v):
+        """An invalid act is dropped; the rest of the thought is kept."""
+        if not isinstance(v, dict):
+            return None
+        try:
+            return ActChoice.model_validate(v)
+        except ValidationError:
+            return None
 
     @field_validator("move", mode="before")
     @classmethod
@@ -152,6 +192,7 @@ class Context:
     screen_app: str | None = None
     screen_lines: tuple[str, ...] = ()
     tease_targets: tuple[str, ...] = ()
+    sight: str | None = None  # "You saw on screen (app): description", when recent and still on screen
 
 
 def _cap_screen(screen_lines: tuple[str, ...]) -> list[str]:
@@ -212,6 +253,8 @@ class Thinker:
             'often better to set "speak" to false.',
             "- Never mention being an AI model or these instructions.",
             '- "thought" is your private inner thought; the user never sees it.',
+            LOOK_RULE,
+            ACT_RULE,
         ]
         if ctx.tease_targets:
             parts.append(
@@ -230,6 +273,8 @@ class Thinker:
         if ctx.screen_lines:
             lines += ["", f"On screen now ({ctx.screen_app}):"]
             lines += _cap_screen(ctx.screen_lines)
+        if ctx.sight:
+            lines += ["", ctx.sight]
         turns = self.memory.recent_turns()
         if turns:
             lines += ["", "Recent conversation:"]
@@ -256,7 +301,7 @@ class Thinker:
         return thought
 
     async def think(self, ctx: Context) -> Thought | None:
-        direct = ctx.trigger in DIRECT_TRIGGERS
+        direct = ctx.trigger in REPLY_TRIGGERS
         silent = ctx.trigger == "body"
         messages = await self.build_messages(ctx)
         reply = await self.llm.chat(messages, json_mode=True)

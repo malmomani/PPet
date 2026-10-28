@@ -9,7 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .config import Config
 from .mind import Mind
-from .protocol import Action, Error, parse_event
+from .protocol import Action, Error, SightEvent, parse_event
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ CLOSE_REPLACED = 4000
 def create_app(cfg: Config, mind: Mind) -> FastAPI:
     active: WebSocket | None = None
     tasks: set[asyncio.Task] = set()
+    sight_task: asyncio.Task | None = None  # the screenshot being described: one at a time
 
     async def sink(action: Action) -> None:
         ws = active
@@ -56,7 +57,7 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
-        nonlocal active
+        nonlocal active, sight_task
         await ws.accept()
         peer = ws.client.host if ws.client else "unknown"  # never log the URL: its query has the token
         token = ws.query_params.get("token", "")
@@ -93,9 +94,18 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
                 except Exception:
                     await sink_to(ws, Error(code="bad_message", message="invalid message"))
                     continue
+                finally:
+                    message = raw = None  # a screenshot's bytes live on only in the event
                 if event is None:
                     continue
-                task = asyncio.create_task(mind.handle(event))
+                if isinstance(event, SightEvent):
+                    if sight_task is not None and not sight_task.done():
+                        log.info("dropping a %s: still describing the last one", event.type)
+                        event = None  # let its picture go now
+                        continue
+                    task = sight_task = asyncio.create_task(mind.handle_sight(event))
+                else:
+                    task = asyncio.create_task(mind.handle(event))
                 tasks.add(task)
                 task.add_done_callback(_handled)
         except WebSocketDisconnect:

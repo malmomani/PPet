@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         handler.addFilter(REDACT_TOKENS)  # covers uvicorn's records too: they propagate to root
 
     try:
-        llm, describer = build_backends(cfg)  # describer: Task 2 hands it to Mind
+        llm, describer = build_backends(cfg)
     except ValueError as e:
         print(f"Refusing to start: {e}", file=sys.stderr)
         return 2
@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     if tts is not None:
         # Load the voice model while the server starts, so her first spoken reply isn't late.
         threading.Thread(target=tts.warm_up, name="kokoro-warm-up", daemon=True).start()
-    mind = Mind(cfg, llm, db, SystemClock(), tts=tts)
+    mind = Mind(cfg, llm, db, SystemClock(), tts=tts, describer=describer)
     app = create_app(cfg, mind)
 
     for ip in _local_ipv4s():

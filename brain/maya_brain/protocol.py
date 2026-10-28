@@ -2,11 +2,12 @@
 
 import json
 import math
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 MOODS: tuple[str, ...] = (
     "happy",
@@ -53,6 +54,50 @@ BODY_WHERE: tuple[str, ...] = ("floor", "platform", "target")
 
 GLANCE_MAX_LINES = 40
 GLANCE_MAX_LINE = 200
+SIGHT_MAX_B64 = 600_000  # a bigger screenshot is dropped
+ACT_RESULT_MAX_DETAIL = 200
+
+ACT_KINDS: tuple[str, ...] = (
+    "open_app",
+    "media",
+    "timer",
+    "alarm",
+    "volume",
+    "web_search",
+    "scroll",
+    "press",
+    "type",
+)
+# The fields each act kind carries (spec §5.1), and which of them it needs.
+ACT_FIELDS: dict[str, tuple[str, ...]] = {
+    "open_app": ("app",),
+    "media": ("key",),
+    "timer": ("seconds", "label"),
+    "alarm": ("hour", "minute", "label"),
+    "volume": ("dir",),
+    "web_search": ("query",),
+    "scroll": ("dir",),
+    "press": ("target",),
+    "type": ("text", "into"),
+}
+_ACT_REQUIRED: dict[str, tuple[str, ...]] = {
+    "open_app": ("app",),
+    "media": ("key",),
+    "timer": ("seconds",),
+    "alarm": ("hour", "minute"),
+    "volume": ("dir",),
+    "web_search": ("query",),
+    "scroll": ("dir",),
+    "press": ("target",),
+    "type": ("text",),
+}
+_ALL_ACT_FIELDS = frozenset(f for fields in ACT_FIELDS.values() for f in fields)
+_DIRS: dict[str, tuple[str, ...]] = {"volume": ("up", "down", "mute"), "scroll": ("up", "down")}
+MEDIA_KEYS: tuple[str, ...] = ("play_pause", "next", "previous")
+ACT_STATUSES: tuple[str, ...] = ("done", "declined", "timeout", "failed", "blocked")
+
+# A press needs the user's yes when its tag is one of these, or its target/label holds a risky word (spec §5.2).
+RISKY_TAGS: tuple[str, ...] = ("send", "share", "comment", "follow")
 
 
 def _new_id() -> str:
@@ -227,6 +272,44 @@ class BodyMomentEvent(_Message):
         return _known_target(v)
 
 
+class SightEvent(_Message):
+    """A screenshot of the user's phone (JPEG, base64). RAM only: never stored or logged. Never queued offline."""
+
+    type: Literal["sight"] = "sight"
+    package: str
+    app: str = Field(min_length=1, max_length=100)
+    reason: Literal["auto", "asked"]
+    image_b64: str = Field(max_length=SIGHT_MAX_B64)
+
+
+class SightFailedEvent(_Message):
+    """A look the brain asked for could not happen. Never queued offline."""
+
+    type: Literal["sight_failed"] = "sight_failed"
+    reason: Literal["blocked", "error"] = "error"
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _known_reason(cls, v: object) -> object:
+        return v if v in ("blocked", "error") else "error"
+
+
+class ActResultEvent(_Message):
+    """How an `act` ended on the phone. Never queued offline."""
+
+    type: Literal["act_result"] = "act_result"
+    act_id: str
+    status: Literal[*ACT_STATUSES]
+    detail: str | None = None
+
+    @field_validator("detail", mode="before")
+    @classmethod
+    def _tidy_detail(cls, v: object) -> str | None:
+        if not isinstance(v, str) or not v.strip():
+            return None
+        return v.strip()[:ACT_RESULT_MAX_DETAIL]
+
+
 class OfflineSummary(_Message):
     type: Literal["offline_summary"] = "offline_summary"
     events: list[dict]
@@ -247,6 +330,9 @@ Event = Annotated[
     | GlanceEvent
     | BodyEvent
     | BodyMomentEvent
+    | SightEvent
+    | SightFailedEvent
+    | ActResultEvent
     | OfflineSummary,
     Field(discriminator="type"),
 ]
@@ -267,6 +353,9 @@ _EVENT_TYPES = frozenset(
         "glance",
         "body",
         "body_moment",
+        "sight",
+        "sight_failed",
+        "act_result",
         "offline_summary",
     }
 )
@@ -338,7 +427,138 @@ class Error(_Message):
     message: str
 
 
+class Look(_Message):
+    """Ask the phone for a screenshot now; it answers with a `sight` (reason "asked") or `sight_failed`."""
+
+    type: Literal["look"] = "look"
+
+
+class ActChoice(BaseModel):
+    """Something to do on the phone: a kind from ACT_KINDS and that kind's fields (spec §5.1).
+
+    Fields of other kinds are dropped; a missing or out-of-bounds field is a validation error.
+    """
+
+    kind: Literal[*ACT_KINDS]
+    app: str | None = Field(default=None, min_length=1, max_length=100)
+    key: Literal[*MEDIA_KEYS] | None = None
+    seconds: int | None = Field(default=None, ge=5, le=86_400)
+    label: str | None = Field(default=None, max_length=60)
+    hour: int | None = Field(default=None, ge=0, le=23)
+    minute: int | None = Field(default=None, ge=0, le=59)
+    dir: str | None = None
+    query: str | None = Field(default=None, min_length=1, max_length=200)
+    target: str | None = Field(default=None, min_length=1, max_length=40)
+    text: str | None = Field(default=None, min_length=1, max_length=500)
+    into: str | None = Field(default=None, max_length=40)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _only_its_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        kind = data.get("kind")
+        keep = ACT_FIELDS.get(kind, ()) if isinstance(kind, str) else ()
+        return {k: v for k, v in data.items() if k not in _ALL_ACT_FIELDS or k in keep}
+
+    @field_validator("seconds", "hour", "minute", mode="before")
+    @classmethod
+    def _no_bools(cls, v: object) -> object:
+        if isinstance(v, bool):
+            raise ValueError("a number, not a boolean")
+        return v
+
+    @field_validator("app", "label", "query", "target", "into", mode="before")
+    @classmethod
+    def _strip(cls, v: object) -> object:
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("label", "into", mode="after")
+    @classmethod
+    def _blank_is_none(cls, v: str | None) -> str | None:
+        return v or None
+
+    @model_validator(mode="after")
+    def _complete(self) -> "ActChoice":
+        missing = [f for f in _ACT_REQUIRED[self.kind] if getattr(self, f) is None]
+        if missing:
+            raise ValueError(f"{self.kind} needs {', '.join(missing)}")
+        if self.kind in _DIRS and self.dir not in _DIRS[self.kind]:
+            raise ValueError(f"{self.kind} dir must be one of {', '.join(_DIRS[self.kind])}")
+        return self
+
+    def fields(self) -> dict:
+        """The kind and its set fields, e.g. {"kind": "timer", "seconds": 600}."""
+        return {"kind": self.kind} | {f: getattr(self, f) for f in ACT_FIELDS[self.kind] if getattr(self, f) is not None}
+
+
+class Act(_Message, ActChoice):
+    """Do something on the phone (brain -> phone); answered by an `act_result` whose act_id is this id."""
+
+    type: Literal["act"] = "act"
+
+
+def parse_act(raw: dict) -> Act:
+    """Validate an act from a dict; anything invalid raises ProtocolError."""
+    if not isinstance(raw, dict):
+        raise ProtocolError("an act must be an object")
+    try:
+        return Act.model_validate(raw)
+    except ValidationError as exc:
+        raise ProtocolError(str(exc)) from exc
+
+
+def words(s: str | None) -> list[str]:
+    """Lower-case whole words (letters and digits, any script) with combining marks removed (like core `words`)."""
+    if not s:
+        return []
+    out: list[str] = []
+    word: list[str] = []
+    for c in s.lower():
+        cat = unicodedata.category(c)
+        if cat.startswith("M"):
+            continue
+        if cat[0] in "LN":
+            word.append(c)
+        elif word:
+            out.append("".join(word))
+            word = []
+    if word:
+        out.append("".join(word))
+    return out
+
+
+RISKY_WORDS: tuple[str, ...] = tuple(
+    words(w)[0]
+    for w in (
+        "send", "post", "publish", "buy", "pay", "order", "checkout", "purchase", "delete", "remove",
+        "call", "dial", "share", "subscribe", "follow", "confirm", "submit", "install", "uninstall", "reply",
+        "إرسال", "ارسال", "نشر", "شراء", "دفع", "حذف", "اتصال", "مشاركة", "متابعة", "اشتراك", "تأكيد",
+    )
+)  # fmt: skip
+_RISKY_SET = frozenset(RISKY_WORDS)
+_ARTICLE = "ال"
+
+
+def _has_risky_word(s: str | None) -> bool:
+    """A risky whole word in `s`; an Arabic word also counts without its leading article ("الإرسال")."""
+    return any(
+        w in _RISKY_SET or (len(w) > len(_ARTICLE) and w.startswith(_ARTICLE) and w[len(_ARTICLE):] in _RISKY_SET)
+        for w in words(s)
+    )
+
+
+def is_risky(act: ActChoice, matched_label: str | None = None) -> bool:
+    """Does `act` need the user's yes (same rule as core `isRisky`)? Any `type`; a `press` on a risky tag or word."""
+    if act.kind == "type":
+        return True
+    if act.kind == "press":
+        target = act.target or ""
+        return target.strip().lower() in RISKY_TAGS or _has_risky_word(target) or _has_risky_word(matched_label)
+    return False
+
+
 Action = Annotated[
-    Say | Animate | State | Move | Typing | Audio | Error,
+    Say | Animate | State | Move | Typing | Audio | Error | Look | Act,
     Field(discriminator="type"),
 ]

@@ -20,7 +20,10 @@ from .db import open_db
 from .llm import EmbedWarmUpError, FakeLLM, LLMError, make_llm
 from .mind import Mind
 from .protocol import (
+    ACT_STATUSES,
+    Act,
     Action,
+    ActResultEvent,
     Animate,
     AppClosed,
     AppOpened,
@@ -32,6 +35,7 @@ from .protocol import (
     Event,
     GlanceEvent,
     Hello,
+    Look,
     Move,
     NotificationEvent,
     Say,
@@ -62,6 +66,8 @@ HELP = """Commands:
   /body <doing> [where] [target]  report her body (doing: idle walk sit perch jump fall nap peek tease dragged;
                     where: floor platform target)
   /moment fell|shooed [target]  her body: she fell, or the user shooed her off a target
+  /sight <app> <description>  what Maya sees on the screen (answers her last look, else an automatic one)
+  /act_result <status> [detail]  answer Maya's last act (done declined timeout failed blocked)
   /screen on|off    turn the phone screen on or off
   /charge on|off    plug in or unplug the charger
   /time HH:MM       jump the virtual clock forward to the next HH:MM (today or tomorrow)
@@ -133,6 +139,16 @@ def parse_command(line: str, now: datetime, voice: bool = False) -> tuple[str, o
         if kind not in ("fell", "shooed"):
             return help_
         return "event", BodyMomentEvent(kind=kind, target=target)
+    if cmd == "sight":
+        app, _, description = arg.partition(" ")
+        if not app or not description.strip():
+            return help_
+        return "sight", (app[:100], description.strip())
+    if cmd == "act_result":
+        status, _, detail = arg.partition(" ")
+        if status not in ACT_STATUSES:
+            return help_
+        return "act_result", (status, detail.strip() or None)
     if cmd == "close":
         return "close", None
     if cmd in ("screen", "charge"):
@@ -192,6 +208,11 @@ def _render(action: Action) -> str | None:
         return f"[move] {action.intent} {action.target}" if action.target else f"[move] {action.intent}"
     if isinstance(action, Typing) and action.on:
         return "(Maya is thinking…)"
+    if isinstance(action, Look):
+        return "[look]"
+    if isinstance(action, Act):
+        fields = " ".join(f"{k}={v}" for k, v in action.fields().items() if k != "kind")
+        return f"[act] {action.kind} {fields}".rstrip()
     return None
 
 
@@ -251,6 +272,8 @@ async def run_sim(
     fresh_audio = False
     step = timedelta(seconds=tick_s if tick_s is not None else mind.cfg.initiative.tick_s)
     app: tuple[str, str, datetime] | None = None  # (package, label, opened_at)
+    look_pending = False  # Maya asked to look: the next /sight answers it
+    last_act: Act | None = None  # the act /act_result answers
 
     def keep_audio(wav: bytes) -> None:
         nonlocal fresh_audio
@@ -263,6 +286,11 @@ async def run_sim(
         fresh_audio = True
 
     async def sink(action: Action) -> None:
+        nonlocal look_pending, last_act
+        if isinstance(action, Look):
+            look_pending = True
+        elif isinstance(action, Act):
+            last_act = action
         if isinstance(action, Audio):
             keep_audio(base64.b64decode(action.data_b64))
             return
@@ -310,6 +338,18 @@ async def run_sim(
                 if isinstance(payload, AppOpened):
                     app = (payload.package, payload.label, clock.now())
                 await guarded(mind.handle(payload))
+            elif kind == "sight":
+                label, description = payload
+                reason = "asked" if look_pending else "auto"
+                look_pending = False
+                await guarded(mind.see(label.lower(), label, reason, description))
+            elif kind == "act_result":
+                if last_act is None:
+                    write("(no act to answer)")
+                    continue
+                status, detail = payload
+                act_id, last_act = last_act.id, None
+                await guarded(mind.handle(ActResultEvent(act_id=act_id, status=status, detail=detail)))
             elif kind == "close":
                 if app is None:
                     write("(no app is open)")
