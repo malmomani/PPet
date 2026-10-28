@@ -7,7 +7,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 MOODS: tuple[str, ...] = (
     "happy",
@@ -92,12 +100,17 @@ _ACT_REQUIRED: dict[str, tuple[str, ...]] = {
     "type": ("text",),
 }
 _ALL_ACT_FIELDS = frozenset(f for fields in ACT_FIELDS.values() for f in fields)
+_ACT_MAX_LEN = {"app": 100, "label": 60, "query": 200, "target": 40, "text": 500, "into": 40}
 _DIRS: dict[str, tuple[str, ...]] = {"volume": ("up", "down", "mute"), "scroll": ("up", "down")}
 MEDIA_KEYS: tuple[str, ...] = ("play_pause", "next", "previous")
 ACT_STATUSES: tuple[str, ...] = ("done", "declined", "timeout", "failed", "blocked")
 
 # A press needs the user's yes when its tag is one of these, or its target/label holds a risky word (spec §5.2).
 RISKY_TAGS: tuple[str, ...] = ("send", "share", "comment", "follow")
+
+
+def _utf16_len(s: str) -> int:
+    return len(s.encode("utf-16-le")) // 2
 
 
 def _new_id() -> str:
@@ -377,6 +390,9 @@ def parse_event(raw: str | dict) -> Event | None:
     event_type = raw.get("type")
     if not isinstance(event_type, str) or event_type not in _EVENT_TYPES:
         return None
+    image = raw.get("image_b64") if event_type == "sight" else None
+    if isinstance(image, str) and len(image) > SIGHT_MAX_B64:
+        raise ProtocolError("sight image too large")  # a fixed message: never echo the picture
     try:
         return _EVENT_ADAPTER.validate_python(raw)
     except ValidationError as exc:
@@ -440,17 +456,17 @@ class ActChoice(BaseModel):
     """
 
     kind: Literal[*ACT_KINDS]
-    app: str | None = Field(default=None, min_length=1, max_length=100)
+    app: str | None = None
     key: Literal[*MEDIA_KEYS] | None = None
     seconds: int | None = Field(default=None, ge=5, le=86_400)
-    label: str | None = Field(default=None, max_length=60)
+    label: str | None = None
     hour: int | None = Field(default=None, ge=0, le=23)
     minute: int | None = Field(default=None, ge=0, le=59)
     dir: str | None = None
-    query: str | None = Field(default=None, min_length=1, max_length=200)
-    target: str | None = Field(default=None, min_length=1, max_length=40)
-    text: str | None = Field(default=None, min_length=1, max_length=500)
-    into: str | None = Field(default=None, max_length=40)
+    query: str | None = None
+    target: str | None = None
+    text: str | None = None
+    into: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -468,15 +484,20 @@ class ActChoice(BaseModel):
             raise ValueError("a number, not a boolean")
         return v
 
-    @field_validator("app", "label", "query", "target", "into", mode="before")
+    @field_validator("app", "query", "target", "text", mode="after")
     @classmethod
-    def _strip(cls, v: object) -> object:
-        return v.strip() if isinstance(v, str) else v
+    def _not_blank(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            raise ValueError("must not be blank")
+        return v
 
-    @field_validator("label", "into", mode="after")
+    @field_validator("app", "label", "query", "target", "text", "into", mode="after")
     @classmethod
-    def _blank_is_none(cls, v: str | None) -> str | None:
-        return v or None
+    def _fits(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Lengths in UTF-16 units, as the phone (Kotlin) counts them."""
+        if v is not None and _utf16_len(v) > _ACT_MAX_LEN[info.field_name]:
+            raise ValueError(f"longer than {_ACT_MAX_LEN[info.field_name]} UTF-16 units")
+        return v
 
     @model_validator(mode="after")
     def _complete(self) -> "ActChoice":
@@ -508,15 +529,18 @@ def parse_act(raw: dict) -> Act:
         raise ProtocolError(str(exc)) from exc
 
 
+_TATWEEL = "\u0640"  # Arabic letter stretching: decoration, not a letter
+
+
 def words(s: str | None) -> list[str]:
-    """Lower-case whole words (letters and digits, any script) with combining marks removed (like core `words`)."""
+    """Lower-case whole words (letters and digits, any script) without combining marks or tatweel (like core `words`)."""
     if not s:
         return []
     out: list[str] = []
     word: list[str] = []
     for c in s.lower():
         cat = unicodedata.category(c)
-        if cat.startswith("M"):
+        if cat.startswith("M") or c == _TATWEEL:
             continue
         if cat[0] in "LN":
             word.append(c)
@@ -538,23 +562,32 @@ RISKY_WORDS: tuple[str, ...] = tuple(
 )  # fmt: skip
 _RISKY_SET = frozenset(RISKY_WORDS)
 _ARTICLE = "ال"
+_ARABIC_PREFIXES = ("", "ب", "ل")  # bi-, li- before the article: "بالإرسال"; li + al is written "لل"
+
+
+def _without_article(w: str) -> list[str]:
+    """The forms of `w` without an Arabic article, with and without a leading و ("and"), bi- or li- (as core)."""
+    out = []
+    for base in (w, w[1:]) if w.startswith("و") else (w,):
+        if base.startswith("لل"):
+            out.append(base[2:])
+        out += [base[len(p + _ARTICLE):] for p in _ARABIC_PREFIXES if base.startswith(p + _ARTICLE)]
+    return [f for f in out if f]
 
 
 def _has_risky_word(s: str | None) -> bool:
-    """A risky whole word in `s`; an Arabic word also counts without its leading article ("الإرسال")."""
-    return any(
-        w in _RISKY_SET or (len(w) > len(_ARTICLE) and w.startswith(_ARTICLE) and w[len(_ARTICLE):] in _RISKY_SET)
-        for w in words(s)
-    )
+    """A risky whole word in `s`; an Arabic word also counts without its article and prefix ("والإرسال", "للدفع")."""
+    return any(w in _RISKY_SET or any(f in _RISKY_SET for f in _without_article(w)) for w in words(s))
 
 
-def is_risky(act: ActChoice, matched_label: str | None = None) -> bool:
-    """Does `act` need the user's yes (same rule as core `isRisky`)? Any `type`; a `press` on a risky tag or word."""
+def is_risky(act: ActChoice) -> bool:
+    """Does `act` need the user's yes? The target-only subset of core `isRisky` (the brain can't see the nodes):
+    any `type`, and a `press` whose target is a risky tag or holds a risky word."""
     if act.kind == "type":
         return True
     if act.kind == "press":
         target = act.target or ""
-        return target.strip().lower() in RISKY_TAGS or _has_risky_word(target) or _has_risky_word(matched_label)
+        return target.strip().lower() in RISKY_TAGS or _has_risky_word(target)
     return False
 
 

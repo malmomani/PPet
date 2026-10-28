@@ -157,6 +157,9 @@ class Initiative:
     def last_reason(self) -> str:
         return self._last_reason
 
+    def current_package(self) -> str | None:
+        return None if self._app is None else self._app["package"]
+
     def current_app(self) -> tuple[str, int] | None:
         if self._app is None:
             return None

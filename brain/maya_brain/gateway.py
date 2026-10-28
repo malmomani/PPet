@@ -9,7 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .config import Config
 from .mind import Mind
-from .protocol import Action, Error, SightEvent, parse_event
+from .protocol import Action, Error, SightEvent, SightFailedEvent, parse_event
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +20,10 @@ CLOSE_REPLACED = 4000
 def create_app(cfg: Config, mind: Mind) -> FastAPI:
     active: WebSocket | None = None
     tasks: set[asyncio.Task] = set()
-    sight_task: asyncio.Task | None = None  # the screenshot being described: one at a time
+    # The screenshot being described (one at a time), whether the user asked for it, and whose socket sent it.
+    sight_task: asyncio.Task | None = None
+    sight_asked = False
+    sight_from: WebSocket | None = None
 
     async def sink(action: Action) -> None:
         ws = active
@@ -42,6 +45,8 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
             yield
         finally:
             stop.set()
+            if sight_task is not None:
+                sight_task.cancel()
             await ticker
 
     app = FastAPI(lifespan=lifespan)
@@ -57,7 +62,7 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
-        nonlocal active, sight_task
+        nonlocal active, sight_task, sight_asked, sight_from
         await ws.accept()
         peer = ws.client.host if ws.client else "unknown"  # never log the URL: its query has the token
         token = ws.query_params.get("token", "")
@@ -99,18 +104,30 @@ def create_app(cfg: Config, mind: Mind) -> FastAPI:
                 if event is None:
                     continue
                 if isinstance(event, SightEvent):
-                    if sight_task is not None and not sight_task.done():
+                    asked = event.reason == "asked"
+                    busy = sight_task is not None and not sight_task.done()
+                    if busy and not asked:
                         log.info("dropping a %s: still describing the last one", event.type)
                         event = None  # let its picture go now
                         continue
-                    task = sight_task = asyncio.create_task(mind.handle_sight(event))
-                else:
+                    if busy and sight_asked:  # two asked looks at once: this one gets "couldn't see"
+                        log.info("can't describe an asked %s now: still describing the last one", event.type)
+                        event = SightFailedEvent(reason="error")
+                    else:
+                        if busy:
+                            log.info("cancelling an automatic sight for an asked one")
+                            sight_task.cancel()
+                        task = sight_task = asyncio.create_task(mind.handle_sight(event))
+                        sight_asked, sight_from = asked, ws
+                if not isinstance(event, SightEvent):
                     task = asyncio.create_task(mind.handle(event))
                 tasks.add(task)
                 task.add_done_callback(_handled)
         except WebSocketDisconnect:
             pass
         finally:
+            if sight_from is ws and sight_task is not None:
+                sight_task.cancel()  # nobody to show it to
             if active is ws:
                 active = None
                 mind.set_connected(False)

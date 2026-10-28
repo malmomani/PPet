@@ -71,7 +71,7 @@ Type plain text to talk to Maya. Slash commands inject events on a virtual clock
 | `/glance <app> <line>[ \| <line>...] [targets=send,like]` | Pretend the user's screen shows these lines (and these buttons: `send like play search share comment follow`) |
 | `/body <doing> [where] [target]` | Report where Maya's body is (`/body perch platform`, `/body tease target send`) |
 | `/moment fell\|shooed [target]` | Her body: she fell, or the user shooed her off a button; `move` actions from the brain print as `[move] <intent> <target>` |
-| `/sight <app> <description>` | Pretend Maya sees this on the screen (no picture or vision model needed). It answers her last `[look]`, else it counts as a look of her own |
+| `/sight <app> <description>` | Pretend Maya sees this on the screen of the app opened with `/app` (no picture or vision model needed). It answers her last `[look]`, else it counts as a look of her own |
 | `/act_result <status> [detail]` | Answer her last `[act] <kind> <fields>` with `done`, `declined`, `timeout`, `failed` or `blocked` |
 | `/screen on\|off`, `/charge on\|off` | Screen and charger events |
 | `/time HH:MM` | Jump the virtual clock forward to the next HH:MM (today or tomorrow) |

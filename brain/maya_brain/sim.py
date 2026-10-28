@@ -66,7 +66,8 @@ HELP = """Commands:
   /body <doing> [where] [target]  report her body (doing: idle walk sit perch jump fall nap peek tease dragged;
                     where: floor platform target)
   /moment fell|shooed [target]  her body: she fell, or the user shooed her off a target
-  /sight <app> <description>  what Maya sees on the screen (answers her last look, else an automatic one)
+  /sight <app> <description>  what Maya sees on the screen of the open /app (answers her last look, else
+                    an automatic one)
   /act_result <status> [detail]  answer Maya's last act (done declined timeout failed blocked)
   /screen on|off    turn the phone screen on or off
   /charge on|off    plug in or unplug the charger
@@ -342,7 +343,8 @@ async def run_sim(
                 label, description = payload
                 reason = "asked" if look_pending else "auto"
                 look_pending = False
-                await guarded(mind.see(label.lower(), label, reason, description))
+                package = app[0] if app is not None else label.lower()  # the app open now, like the phone
+                await guarded(mind.see(package, label, reason, description))
             elif kind == "act_result":
                 if last_act is None:
                     write("(no act to answer)")

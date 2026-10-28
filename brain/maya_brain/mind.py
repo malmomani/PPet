@@ -200,6 +200,8 @@ class Mind:
         self.tts = tts
         self.describer = describer
         self.sight: SeenScreen | None = None  # the latest screenshot she saw, as words (RAM only)
+        self._screen_changes = 0  # bumped when what's on screen changes (another app, app closed, screen off)
+        self._seeing: set[asyncio.Task] = set()  # sights being taken in (kept alive when a describe is cancelled)
         self._acts: dict[str, Act] = {}  # acts sent to the phone, by id, until their act_result arrives
         self.voice_mode = "off"  # from the latest Hello: off | replies | always
         self._voice_reply = False  # True while handling a UserMessage that was spoken
@@ -265,6 +267,8 @@ class Mind:
             if isinstance(event, (UserMessage, UserTap)):
                 self._last_chat = self.clock.now()
             fall_counts = self.initiative.fall_counts()  # before on_event starts a new fall window
+            if self._changes_screen(event):
+                self._screen_changes += 1
             self.initiative.on_event(event)
             if isinstance(event, UserMessage):
                 await self._on_message(event)
@@ -325,23 +329,35 @@ class Mind:
         The picture is dropped as soon as it is described; nothing about it is logged.
         """
         image, event.image_b64 = event.image_b64, ""
+        changes = self._screen_changes
         description = None
         if self.describer is not None:
             try:
-                description = await self.describer.describe(image)
-            except Exception as e:  # a describer should not raise; whatever it was, she just didn't see
+                description = await asyncio.wait_for(self.describer.describe(image), self.cfg.llm.timeout_s)
+            except Exception as e:  # a failure or a timeout: she just didn't see it
                 log.warning("describing a screenshot failed: %s", type(e).__name__)
         del image
-        await self.see(event.package, event.app, event.reason, description)
+        # From here on a cancel (a newer asked look, the phone going away) no longer stops her taking it in.
+        seeing = asyncio.create_task(self.see(event.package, event.app, event.reason, description, changes))
+        self._seeing.add(seeing)
+        seeing.add_done_callback(self._seeing.discard)
+        await asyncio.shield(seeing)
 
-    async def see(self, package: str, app: str, reason: str, description: str | None) -> None:
-        """What she saw on the screen (None: she couldn't make it out). An asked look gets an answer."""
+    async def see(
+        self, package: str, app: str, reason: str, description: str | None, changes: int | None = None
+    ) -> None:
+        """What she saw on the screen (None: she couldn't make it out). An asked look gets an answer.
+
+        `changes` is the screen-change count when the screenshot was taken; if the screen changed since,
+        she still remembers it (and answers), but doesn't treat it as what's on screen now.
+        """
         async with self._lock:
             if description is None:
                 if reason == "asked":
                     await self._respond(self._ctx(LOOK_TRIGGER, COULDNT_SEE))
                 return  # an auto look that failed is simply forgotten
-            self.sight = SeenScreen(app, description, self.clock.now(), package)
+            if changes is None or changes == self._screen_changes:
+                self.sight = SeenScreen(app, description, self.clock.now(), package)
             self.memory.add_turn("event", _clip(f"you looked at {app}: {description}", SIGHT_LINE_MAX))
             if reason == "asked":
                 detail = f"You looked at the screen as the user asked. You saw: {description}"
@@ -356,6 +372,12 @@ class Mind:
             log.debug("act_result for an unknown act")
             return
         self.memory.add_turn("event", _act_result_line(act, event))
+
+    def _changes_screen(self, event: Event) -> bool:
+        """Does this event replace what's on screen (so a screenshot taken before it is stale)?"""
+        if isinstance(event, AppOpened):
+            return event.package != self.initiative.current_package()
+        return isinstance(event, AppClosed) or (isinstance(event, Screen) and not event.on)
 
     def _forget_glance(self) -> None:
         """The screen she last saw is gone (another app, the app closed, the screen off)."""
@@ -442,12 +464,11 @@ class Mind:
         return ctx
 
     def _sight_fresh(self) -> bool:
-        """A sight counts while it is recent and the latest glance (if any) is of the same app."""
-        return (
-            self.sight is not None
-            and self.clock.now() - self.sight.at <= SCREEN_FRESH
-            and (self.glance is None or self.glance.app == self.sight.app)
-        )
+        """A sight counts while it is recent and of the app on screen (the latest glance's, else the current one)."""
+        if self.sight is None or self.clock.now() - self.sight.at > SCREEN_FRESH:
+            return False
+        package = self.glance.package if self.glance is not None else self.initiative.current_package()
+        return package is None or package == self.sight.package
 
     async def _think(self, ctx: Context) -> Thought | None:
         try:

@@ -42,8 +42,8 @@ SELF_MODEL = (
 BODY_QUIET_DETAIL = "A quiet moment. Decide what your body does next; you won't speak."
 
 LOOK_RULE = (
-    '- "look" (boolean): true to take a look at the user\'s screen (e.g. when they ask you to look at '
-    "something); you'll see it in a moment."
+    '- "look" (boolean): true to take a look at the user\'s screen, only when the user asks you to look; '
+    "you'll see it in a moment."
 )
 ACT_RULE = (
     '- "act" (object or null): do something on the phone: {"kind": ..., fields}. Kinds: open_app {app}, '

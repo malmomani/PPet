@@ -16,6 +16,7 @@ from maya_brain.protocol import (
     RISKY_WORDS,
     Act,
     ActResultEvent,
+    AppClosed,
     AppOpened,
     GlanceEvent,
     Look,
@@ -98,6 +99,9 @@ def test_parse_sight_caps():
     for bad in ({"image_b64": "A" * 600_001}, {"reason": "bored", "image_b64": IMG}, {}, {"image_b64": 5}):
         with pytest.raises(ProtocolError):
             parse_event({**base, **bad})
+    with pytest.raises(ProtocolError) as exc:
+        parse_event({**base, "image_b64": "SECRET" * 100_001})
+    assert str(exc.value) == "sight image too large"  # never echoes the picture
     with pytest.raises(ProtocolError):
         parse_event({**base, "app": "", "image_b64": IMG})
 
@@ -188,6 +192,20 @@ def test_parse_act_per_kind():
     bad(kind="teleport")
     bad()
 
+    # blank is not a value; nothing is trimmed
+    for kind, field in (("open_app", "app"), ("web_search", "query"), ("press", "target"), ("type", "text")):
+        bad(kind=kind, **{field: "   "})
+        assert getattr(ok(kind=kind, **{field: " x "}), field) == " x "
+    # lengths count UTF-16 units, like the phone: an emoji is two
+    ok(kind="press", target="😀" * 20)
+    bad(kind="press", target="😀" * 20 + "x")
+    ok(kind="type", text="😀" * 250)
+    bad(kind="type", text="😀" * 250 + "x")
+    bad(kind="open_app", app="😀" * 50 + "x")
+    bad(kind="web_search", query="😀" * 100 + "x")
+    bad(kind="timer", seconds=60, label="😀" * 30 + "x")
+    bad(kind="type", text="hi", into="😀" * 20 + "x")
+
     # fields of other kinds are ignored, so they never reach the phone
     o = ok(kind="open_app", app="Maps", seconds=3, text="x" * 900, dir="sideways")
     assert (o.seconds, o.text, o.dir) == (None, None, None)
@@ -218,9 +236,11 @@ def test_is_risky_en_ar():
     assert is_risky(press("تَأْكِيد"))  # with harakat
     assert is_risky(press("المتابعة"))
     assert not is_risky(press("الرسائل"))
-    # the label the phone matched also counts
-    assert is_risky(press("the blue button"), "Send message")
-    assert not is_risky(press("the blue button"), "Play")
+    # tatweel is ignored; "and" (و), bi- (ب) and li- (ل, لل) before the article count too
+    for target in ("إرسـال", "تأكـيـد", "والإرسال", "بالدفع", "للدفع", "وللدفع", "وبالشراء", "لالحذف"):
+        assert is_risky(press(target)), target
+    for target in ("للقراءة", "والزر", "وحذفت", "بحذف", "ال", "وال", "لل"):
+        assert not is_risky(press(target)), target
     # any type is risky; other kinds never are
     assert is_risky(Act(kind="type", text="hi"))
     for act in (
@@ -344,8 +364,8 @@ async def test_sight_in_prompt_age_and_app(seer, clock):
     await seer.handle(GlanceEvent(package="instagram", app="Instagram", lines=["nice"]))
     await seer.handle(UserMessage(text="hi"))
     assert line in last_user_prompt(seer)
-    # another app's glance: not shown
-    await seer.handle(GlanceEvent(package="instagram", app="Reddit", lines=["text"]))
+    # another app's glance: not shown (packages are compared, not labels)
+    await seer.handle(GlanceEvent(package="reddit", app="Instagram", lines=["text"]))
     await seer.handle(UserMessage(text="hi"))
     assert "You saw on screen" not in last_user_prompt(seer)
     # older than 10 minutes: not shown
@@ -360,6 +380,72 @@ async def test_sight_in_prompt_age_and_app(seer, clock):
     await seer.handle_sight(sight("Instagram"))
     await seer.handle(Screen(on=False))
     assert seer.sight is None
+
+
+async def test_sight_compares_current_app_package_without_glance(seer):
+    await seer.handle(AppOpened(package="instagram", label="Instagram"))
+    await seer.handle_sight(sight("Instagram"))
+    await seer.handle(UserMessage(text="hi"))
+    assert "You saw on screen (Instagram)" in last_user_prompt(seer)
+    seer.initiative._app["package"] = "com.other"  # the tracked app no longer matches
+    await seer.handle(UserMessage(text="hi"))
+    assert "You saw on screen" not in last_user_prompt(seer)
+
+
+async def test_screen_change_while_describing_drops_the_sight(seer, sent):
+    gate = asyncio.Event()
+
+    class SlowDescriber:
+        async def describe(self, image_b64):
+            await gate.wait()
+            return "a cat on a sofa"
+
+    seer.describer = SlowDescriber()
+    await seer.handle(AppOpened(package="instagram", label="Instagram"))
+    task = asyncio.create_task(seer.handle_sight(sight("Instagram")))
+    await asyncio.sleep(0)
+    await seer.handle(AppOpened(package="com.whatsapp", label="WhatsApp"))
+    gate.set()
+    await task
+    assert seer.sight is None  # stale: the user moved on
+    assert turns(seer)[-1] == "you looked at Instagram: a cat on a sofa"  # still remembered
+    await seer.handle(UserMessage(text="hi"))
+    assert "You saw on screen" not in last_user_prompt(seer)
+
+    # an asked look is still answered even when the screen changed meanwhile
+    for change in (AppClosed(package="com.whatsapp", label="WhatsApp", duration_s=5), Screen(on=False)):
+        gate.clear()
+        sent.clear()
+        script(seer, reply(say="cute!"))
+        task = asyncio.create_task(seer.handle_sight(sight("Instagram", reason="asked")))
+        await asyncio.sleep(0)
+        await seer.handle(change)
+        gate.set()
+        await task
+        assert seer.sight is None and says(sent) == ["cute!"]
+        await seer.handle(Screen(on=True))
+
+    # the same app opening again is no change
+    await seer.handle(AppOpened(package="instagram", label="Instagram"))
+    gate.clear()
+    task = asyncio.create_task(seer.handle_sight(sight("Instagram")))
+    await asyncio.sleep(0)
+    await seer.handle(AppOpened(package="instagram", label="Instagram"))
+    gate.set()
+    await task
+    assert seer.sight is not None
+
+
+async def test_describe_times_out(seer, sent):
+    class Stuck:
+        async def describe(self, image_b64):
+            await asyncio.sleep(3600)
+
+    seer.cfg.llm.timeout_s = 0.01
+    seer.describer = Stuck()
+    script(seer, reply(say="it's all blurry"))
+    await asyncio.wait_for(seer.handle_sight(sight(reason="asked")), timeout=2)
+    assert says(sent) == ["it's all blurry"] and seer.sight is None
 
 
 # ---- look and act from thoughts ----
@@ -426,6 +512,17 @@ async def test_own_initiative_act_limits(seer, clock):
     clock.set(start + timedelta(hours=1, seconds=1))  # the first one drops out of the hour
     assert len(await own_act(seer, TIMER)) == 1
     assert len(seer.initiative._acts) == 10  # only the last hour is kept
+
+
+async def test_own_act_needs_someone_to_see_it(seer, clock):
+    friend(seer)
+    seer.set_connected(False)
+    assert await own_act(seer, TIMER) == []
+    seer.set_connected(True)
+    await seer.handle(Screen(on=False))
+    assert await own_act(seer, TIMER) == []
+    await seer.handle(Screen(on=True))
+    assert len(await own_act(seer, TIMER)) == 1
 
 
 async def test_own_initiative_never_risky(seer):
@@ -532,7 +629,34 @@ def test_main_passes_describer_to_mind(tmp_path, monkeypatch):
     assert isinstance(seen["describer"], OllamaDescriber)
 
 
-def test_gateway_runs_one_sight_at_a_time(clock, caplog):
+class Gated:
+    """A describer that waits until the test opens its gate; records starts and cancels (by image marker)."""
+
+    def __init__(self):
+        self.started, self.cancelled, self.gates = [], [], {}
+
+    async def describe(self, image_b64):
+        self.started.append(image_b64)
+        gate = self.gates[image_b64] = asyncio.Event()
+        try:
+            await gate.wait()
+        except asyncio.CancelledError:
+            self.cancelled.append(image_b64)
+            raise
+        return f"seen {image_b64}"
+
+
+def eventually(cond, what):
+    for _ in range(300):
+        if cond():
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+@pytest.fixture
+def gw(clock):
+    """A gateway around a Mind with a Gated describer; yields (TestClient, mind, describer, llm)."""
     import warnings
 
     with warnings.catch_warnings():
@@ -545,38 +669,59 @@ def test_gateway_runs_one_sight_at_a_time(clock, caplog):
     cfg = Config()
     cfg.server.token = "t"
     conn = open_db(":memory:")
-    started = []
+    describer = Gated()
+    llm = FakeLLM()
+    mind = Mind(cfg, llm, conn, clock, describer=describer)
+    with TestClient(create_app(cfg, mind)) as c:
+        yield c, mind, describer, llm
+    conn.close()
 
-    class Blocking:
-        def __init__(self):
-            self.gate = None
 
-        async def describe(self, image_b64):
-            started.append(len(image_b64))
-            self.gate = asyncio.Event()
-            await self.gate.wait()
-            return "a red car"
+def raw_sight(marker, reason="auto"):
+    return {"type": "sight", "package": "p", "app": "Gallery", "reason": reason, "image_b64": marker}
 
-    describer = Blocking()
-    mind = Mind(cfg, FakeLLM(), conn, clock, describer=describer)
-    app = create_app(cfg, mind)
-    raw = {"type": "sight", "package": "p", "app": "Gallery", "reason": "auto", "image_b64": "SECRETPIXELS"}
-    with caplog.at_level(logging.DEBUG), TestClient(app) as c, c.websocket_connect("/ws?token=t") as ws:
-        ws.send_json(raw)
-        ws.send_json(raw)  # still describing the first: dropped
+
+def test_gateway_runs_one_sight_at_a_time(gw, caplog):
+    c, mind, describer, _ = gw
+    with caplog.at_level(logging.DEBUG), c.websocket_connect("/ws?token=t") as ws:
+        ws.send_json(raw_sight("SECRETPIXELS"))
+        ws.send_json(raw_sight("SECRETPIXELS2"))  # still describing the first: dropped
         ws.send_json({"type": "user_message", "text": "hi"})  # chat is not blocked by vision
         got = [ws.receive_json() for _ in range(4)]
         assert any(m["type"] == "say" for m in got)
-        assert started == [len("SECRETPIXELS")]
-        c.portal.call(describer.gate.set)
-        for _ in range(200):
-            if mind.sight is not None:
-                break
-            time.sleep(0.01)
-    conn.close()
-    assert mind.sight is not None and mind.sight.description == "a red car"
+        assert describer.started == ["SECRETPIXELS"]
+        c.portal.call(describer.gates["SECRETPIXELS"].set)
+        eventually(lambda: mind.sight is not None, "the sight")
+    assert mind.sight.description == "seen SECRETPIXELS"
     assert "SECRETPIXELS" not in caplog.text
     assert any("sight" in r.getMessage() and "dropp" in r.getMessage() for r in caplog.records)
+
+
+def test_gateway_asked_sight_replaces_auto_and_is_always_answered(gw):
+    c, mind, describer, llm = gw
+    with c.websocket_connect("/ws?token=t") as ws:
+        ws.send_json(raw_sight("AUTO"))
+        eventually(lambda: describer.started == ["AUTO"], "the auto describe")
+        ws.send_json(raw_sight("ASKED", "asked"))  # the user is waiting: the auto one makes way
+        eventually(lambda: describer.started == ["AUTO", "ASKED"], "the asked describe")
+        assert describer.cancelled == ["AUTO"]
+        ws.send_json(raw_sight("ASKED2", "asked"))  # can't describe two asked looks at once
+        eventually(lambda: llm.calls, "an answer")
+        assert "Now: You tried to look at the screen but couldn't see it." in llm.calls[-1][-1]["content"]
+        assert describer.started == ["AUTO", "ASKED"]  # not described, but answered
+        c.portal.call(describer.gates["ASKED"].set)
+        eventually(lambda: len(llm.calls) == 2, "the asked look's answer")
+        assert "You saw: seen ASKED" in llm.calls[-1][-1]["content"]
+    assert mind.sight.description == "seen ASKED"
+
+
+def test_gateway_cancels_sight_when_phone_goes(gw):
+    c, mind, describer, _ = gw
+    with c.websocket_connect("/ws?token=t") as ws:
+        ws.send_json(raw_sight("BYE"))
+        eventually(lambda: describer.started == ["BYE"], "the describe")
+    eventually(lambda: describer.cancelled == ["BYE"], "the cancel")
+    assert mind.sight is None
 
 
 # ---- simulator ----
@@ -621,6 +766,13 @@ async def test_sim_sight_act_result(seer, clock):
     assert "(no act to answer)" in text  # each act is answered once
 
 
+async def test_sim_sight_uses_the_open_app(seer, clock):
+    lines = iter(["/app Insta", "/sight Instagram a cat", "hi", "/quit"])
+    await run_sim(seer, clock, lambda: next(lines), [].append)
+    assert seer.sight.package == "insta"  # the package /app opened
+    assert "You saw on screen (Instagram): a cat" in last_user_prompt(seer)
+
+
 async def test_look_and_act_offered_in_prompt(thinker):
     from maya_brain.thinker import ACT_RULE, LOOK_RULE, Context
 
@@ -628,5 +780,6 @@ async def test_look_and_act_offered_in_prompt(thinker):
         system = (await thinker.build_messages(Context(trigger, "d")))[0]["content"]
         assert LOOK_RULE in system and ACT_RULE in system
     assert ACT_RULE.count("\n") == 0 and "confirmed by the user" in ACT_RULE
+    assert "only when the user asks you to look" in LOOK_RULE
     for kind in ACT_KINDS:
         assert f"{kind} {{" in ACT_RULE
