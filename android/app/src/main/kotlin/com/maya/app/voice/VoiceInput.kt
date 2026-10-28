@@ -22,12 +22,12 @@ import com.maya.app.Prefs
  *
  * Privacy / recognizer choice: on Android 13+ the on-device recognizer is used first, so audio
  * stays on the phone. If it is missing, or fails before it is ready (no English model, service
- * error), and [Prefs.allowOnlineSpeech] is on, the same session is retried once with the default
- * recognizer (Google voice typing) with EXTRA_PREFER_OFFLINE, which may process audio online; the
- * failure is remembered for the rest of the process, so later sessions go straight to the default
- * recognizer (see [forgetOnDeviceFailure]). With the pref off, only the on-device recognizer is
- * used and input is unavailable without it. Older Android always uses the default recognizer with
- * EXTRA_PREFER_OFFLINE.
+ * error, or it never starts), and [Prefs.allowOnlineSpeech] is on, the session is retried once
+ * with the default recognizer (Google voice typing) with EXTRA_PREFER_OFFLINE, which may process
+ * audio online; the failure is remembered for the rest of the process, so later sessions go
+ * straight to the default recognizer (see [forgetOnDeviceFailure]). With the pref off, only the
+ * on-device recognizer is used and input is unavailable without it. Older Android always uses the
+ * default recognizer with EXTRA_PREFER_OFFLINE.
  *
  * Mic rights: on Android 14+ a background service may not record, so every session runs inside
  * [VoiceActivity], a translucent foreground activity. Below 14 the recognizer first runs from the
@@ -205,7 +205,10 @@ class VoiceInput(context: Context, private val listener: Listener) {
             // No English model for the recognizer. The on-device one may hand over to the default
             // recognizer (only when the user allows it); otherwise input is unavailable.
             SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
-                if (!ready && canFallBack) fallBackToDefault(code) else fail(recognizerFailure())
+                if (!ready && canFallBack) fallBackToDefault("error $code") else fail(recognizerFailure())
+            // The voice activity was closed (back, home, the system): the session ends with what was
+            // heard. Never a reason to give up on the on-device recognizer.
+            VoiceBridge.ERROR_ACTIVITY_CLOSED -> deliverHeard()
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
                 if (busyRetried || stopRequested) {
                     deliverHeard()
@@ -220,7 +223,7 @@ class VoiceInput(context: Context, private val listener: Listener) {
             // the on-device recognizer). After a release, these are just the end of a short hold.
             SpeechRecognizer.ERROR_SERVER, SpeechRecognizer.ERROR_SERVER_DISCONNECTED, SpeechRecognizer.ERROR_CLIENT ->
                 if (!ready && !stopRequested) {
-                    if (canFallBack) fallBackToDefault(code) else fail(recognizerFailure())
+                    if (canFallBack) fallBackToDefault("error $code") else fail(recognizerFailure())
                 } else {
                     noteSilence()
                     deliverHeard()
@@ -245,6 +248,9 @@ class VoiceInput(context: Context, private val listener: Listener) {
         if (!active || ready) return
         when {
             stopRequested -> deliverHeard() // a quick release, not a refused mic: keep the mode
+            // The activity has mic rights, so an on-device recognizer that never starts (often on
+            // Samsung, with no error) is treated as missing: try the default recognizer once.
+            activityMode && canFallBack -> fallBackToDefault("never ready")
             activityMode -> fail(micFailure())
             else -> fallbackToActivity()
         }
@@ -276,14 +282,15 @@ class VoiceInput(context: Context, private val listener: Listener) {
     }
 
     /**
-     * The on-device recognizer failed before it was ready: remember that for this process and run
-     * the same session once more with the default recognizer (Google voice typing).
+     * The on-device recognizer failed before it was ready (an error, or it never started): remember
+     * that for this process and run the same session once more with the default recognizer
+     * (Google voice typing). [why] is for the log only.
      */
-    private fun fallBackToDefault(code: Int) {
+    private fun fallBackToDefault(why: String) {
         onDeviceFailed = true
         useOnDevice = false
         canFallBack = false
-        Log.i(TAG, "on-device recognizer failed (error $code); using the default recognizer")
+        Log.i(TAG, "on-device recognizer failed ($why); using the default recognizer")
         tearDown()
         if (stopRequested) deliverHeard() else launch()
     }

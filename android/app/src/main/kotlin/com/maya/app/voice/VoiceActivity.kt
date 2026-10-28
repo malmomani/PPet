@@ -20,6 +20,12 @@ internal object VoiceBridge {
     }
 
     var current: Request? = null
+
+    /**
+     * Reported (instead of a [SpeechRecognizer] error code) when the activity is closed by the
+     * system or the user (back, home) before a result: the end of the session, not a recognizer failure.
+     */
+    const val ERROR_ACTIVITY_CLOSED = -1001
 }
 
 /**
@@ -68,7 +74,7 @@ class VoiceActivity : Activity() {
             // Closed by the system or the user (back, home): the session ends with what was heard.
             if (!reported && isLive(req)) {
                 reported = true
-                req.callbacks.onError(SpeechRecognizer.ERROR_CLIENT)
+                req.callbacks.onError(VoiceBridge.ERROR_ACTIVITY_CLOSED)
             }
         }
         super.onDestroy()
