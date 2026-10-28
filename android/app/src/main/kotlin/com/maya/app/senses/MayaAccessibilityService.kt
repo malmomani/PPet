@@ -62,11 +62,12 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
     /**
      * A visible node of one live pass, for acting on it. [clickIdx] is the index (in the pass) of
      * the nearest clickable, enabled node at or above it, -1 if none. [field] is an editable,
-     * non-password node.
+     * non-password node. [depth] is 0 for the root.
      */
     private class LiveNode(
         val ui: UiNode,
         val info: AccessibilityNodeInfo,
+        val depth: Int,
         val clickIdx: Int,
         val field: Boolean,
         val focused: Boolean,
@@ -310,14 +311,30 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
         val n = matchButton(pass, target)
         val press = n?.let { pressNodeOf(pass, it) }
         val b = press?.node?.bounds
+        val x = b?.centerX ?: 0
+        val y = b?.let { (it.top + it.bottom) / 2 } ?: 0
         when {
             !pass.readable -> HandResult.REFUSED
-            press == null || b == null -> HandResult.NOT_FOUND
+            n == null || press == null || b == null -> HandResult.NOT_FOUND
             !allow(pass.pkg, press) -> HandResult.REFUSED
-            dispatchTap(b.centerX, (b.top + b.bottom) / 2, onDone) -> HandResult.DONE
+            // the tap lands on the deepest node under that point: it must be part of the checked
+            // button (a nested clickable, or anything drawn over it, was not checked)
+            hitAt(pass, x, y)?.clickIdx != n.clickIdx -> HandResult.CHANGED
+            dispatchTap(x, y, onDone) -> HandResult.DONE
             else -> HandResult.FAILED
         }
     } ?: HandResult.NOT_FOUND
+
+    /** The deepest node of the pass whose bounds hold ([x], [y]); among equals the later one (drawn on top). */
+    private fun hitAt(pass: LivePass, x: Int, y: Int): LiveNode? {
+        var hit: LiveNode? = null
+        for (node in pass.nodes) {
+            val b = node.ui.bounds
+            if (x < b.left || x >= b.right || y < b.top || y >= b.bottom) continue
+            if (hit == null || node.depth >= hit.depth) hit = node
+        }
+        return hit
+    }
 
     /** A tap gesture at ([x], [y]) in screen pixels; false if it could not be sent. */
     private fun dispatchTap(x: Int, y: Int, onDone: (Boolean) -> Unit): Boolean {
@@ -341,13 +358,15 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
 
     override fun findField(into: String?): FieldNode? = withLiveTree { pass -> fieldOf(pass, into)?.let { FieldNode(it.ui, pass.pkg) } }
 
-    override fun setText(into: String?, text: String, allow: (String?, UiNode) -> Boolean): HandResult = withLiveTree { pass ->
-        val f = fieldOf(pass, into)
+    override fun setText(text: String, choose: (String?, List<UiNode>) -> UiNode?): HandResult = withLiveTree { pass ->
+        val fields = pass.nodes.filter { it.field }
+        val chosen = if (pass.readable) choose(pass.pkg, fields.map { it.ui }) else null
+        val f = chosen?.let { c -> fields.firstOrNull { it.ui === c } }
         when {
-            !pass.readable -> HandResult.REFUSED
+            !pass.readable || chosen == null -> HandResult.REFUSED
             f == null -> HandResult.NOT_FOUND
             // read again in this pass: never a password field, whatever the app did meanwhile
-            f.info.isPassword || !f.info.isEditable || !allow(pass.pkg, f.ui) -> HandResult.REFUSED
+            f.info.isPassword || !f.info.isEditable -> HandResult.REFUSED
             else -> {
                 val args = Bundle()
                 args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
@@ -399,12 +418,12 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
      */
     private fun liveNodes(root: AccessibilityNodeInfo, all: MutableList<AccessibilityNodeInfo>): List<LiveNode> {
         val out = ArrayList<LiveNode>()
-        val stack = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        val stack = ArrayDeque<Triple<AccessibilityNodeInfo, Int, Int>>() // node, parent's clickIdx, depth
         val r = Rect()
-        stack.addLast(root to -1)
+        stack.addLast(Triple(root, -1, 0))
         var visited = 0
         while (stack.isNotEmpty() && visited < MAX_NODES) {
-            val (node, parentClick) = stack.removeLast()
+            val (node, parentClick, depth) = stack.removeLast()
             visited++
             if (!node.isVisibleToUser) continue
             node.getBoundsInScreen(r)
@@ -425,13 +444,13 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
                 description = description,
                 text = if (password || editable) null else node.text?.toString(),
             )
-            out.add(LiveNode(ui, node, clickIdx, editable && !password, node.isFocused, node.isScrollable))
+            out.add(LiveNode(ui, node, depth, clickIdx, editable && !password, node.isFocused, node.isScrollable))
             if (password || editable) continue
             // Pushed last-first so the first child is visited first.
             for (i in node.childCount - 1 downTo 0) {
                 val child = node.getChild(i) ?: continue
                 all.add(child)
-                stack.addLast(child to clickIdx)
+                stack.addLast(Triple(child, clickIdx, depth + 1))
             }
         }
         return out

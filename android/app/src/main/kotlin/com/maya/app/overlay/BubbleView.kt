@@ -1,5 +1,6 @@
 package com.maya.app.overlay
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -7,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -82,6 +84,8 @@ class BubbleView(context: Context, private val wm: WindowManager) {
     /** Where the bubble was when the buttons were last (re)armed. */
     private var armX = 0
     private var armY = 0
+    /** When the finger went down for the latest touch on ✔ or ✖ (uptime). */
+    private var lastDownMs = 0L
 
     val isShowing: Boolean get() = attached
 
@@ -151,8 +155,9 @@ class BubbleView(context: Context, private val wm: WindowManager) {
     fun destroy() = hide()
 
     private fun answer(yes: Boolean) {
-        // A tap meant for the app (the bubble just appeared or moved under the finger) is no answer.
-        if (SystemClock.uptimeMillis() < armedAtMs) return
+        // A tap meant for the app (the bubble just appeared or moved under the finger) is no answer:
+        // the touch must have started after the buttons were armed.
+        if (lastDownMs < armedAtMs || SystemClock.uptimeMillis() < armedAtMs) return
         val callback = (if (yes) onYes else onNo) ?: return
         hide() // ends the question first, so the callback is called once
         callback()
@@ -222,7 +227,8 @@ class BubbleView(context: Context, private val wm: WindowManager) {
         armY = params.y
     }
 
-    /** A big round-ish tap target for ✔ or ✖. */
+    /** A big round-ish tap target for ✔ or ✖ (the touch listener only notes when a touch starts; clicks stay normal). */
+    @SuppressLint("ClickableViewAccessibility")
     private fun answerButton(context: Context, label: String, color: Int, onTap: () -> Unit): TextView =
         TextView(context).apply {
             text = label
@@ -234,6 +240,10 @@ class BubbleView(context: Context, private val wm: WindowManager) {
             isClickable = true
             // no answer through another app's window drawn over the bubble (tapjacking)
             filterTouchesWhenObscured = true
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) lastDownMs = event.downTime
+                false
+            }
             setOnClickListener { onTap() }
         }
 

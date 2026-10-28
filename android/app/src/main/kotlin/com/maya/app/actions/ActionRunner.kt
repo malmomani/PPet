@@ -94,8 +94,11 @@ class ActionRunner(
     /** What the user said yes to pressing: [label] of the matched node, the click target's id and bounds. */
     private data class ButtonSig(val pkg: String?, val viewId: String?, val label: String?, val bounds: Box)
 
-    /** What the user said yes to typing into: the app and the field's id (else its hint). */
-    private data class FieldSig(val pkg: String?, val id: String?)
+    /**
+     * What the user said yes to typing into: the app, the field's id (its view id, else its hint or
+     * description; null when it has neither) and its bounds (null when empty). Never the app alone.
+     */
+    private data class FieldSig(val pkg: String?, val id: String?, val bounds: Box?)
 
     /** A system kind: why it failed (null: it started), and the package it started, to check it came to the front. */
     private class Outcome(val failure: String?, val launched: String? = null)
@@ -179,8 +182,8 @@ class ActionRunner(
     }
 
     /**
-     * A system kind: failed, or done; an app it started must be in front [LAUNCH_CHECK_MS] later
-     * (else Android blocked the start), when the front app can be told.
+     * A system kind: failed, or done; an app it started must be in front [LAUNCH_CHECK_MS] later, or
+     * twice that (else Android blocked the start), when the front app can be told.
      */
     private fun system(j: Job, action: () -> Outcome) {
         val out = action()
@@ -189,10 +192,17 @@ class ActionRunner(
         when {
             failure != null -> finish(j, FAILED, failure)
             launched == null -> finish(j, DONE, null)
-            else -> later(j, LAUNCH_CHECK_MS) {
-                val front = frontApp()
-                if (front == null || front == launched) finish(j, DONE, null) else finish(j, FAILED, "android blocked it")
-            }
+            else -> later(j, LAUNCH_CHECK_MS) { checkFront(j, launched, last = false) }
+        }
+    }
+
+    /** Done once [launched] is in front (or nobody can tell); after the [last] look, Android blocked it. */
+    private fun checkFront(j: Job, launched: String, last: Boolean) {
+        val front = frontApp()
+        when {
+            front == null || front == launched -> finish(j, DONE, null)
+            last -> finish(j, FAILED, "android blocked it")
+            else -> later(j, LAUNCH_CHECK_MS) { checkFront(j, launched, last = true) }
         }
     }
 
@@ -207,6 +217,7 @@ class ActionRunner(
             HandResult.DONE -> finish(j, DONE, null)
             HandResult.NOT_FOUND -> finish(j, FAILED, "nothing to scroll")
             HandResult.REFUSED -> refuse(j, refused)
+            HandResult.CHANGED -> finish(j, FAILED, "screen changed")
             HandResult.FAILED -> finish(j, FAILED, "couldn't scroll")
         }
     }
@@ -251,6 +262,7 @@ class ActionRunner(
             HandResult.DONE -> finish(j, DONE, null)
             HandResult.NOT_FOUND -> finish(j, FAILED, "not on screen")
             HandResult.REFUSED -> pressRefused(j, check)
+            HandResult.CHANGED -> finish(j, FAILED, "screen changed")
             HandResult.FAILED -> if (node != null) tapFallback(j, h, node.clickable.bounds) else finish(j, FAILED, "couldn't press it")
         }
     }
@@ -270,6 +282,8 @@ class ActionRunner(
                 HandResult.DONE -> Unit // the gesture's callback finishes it
                 HandResult.NOT_FOUND -> finish(j, FAILED, "not on screen")
                 HandResult.REFUSED -> pressRefused(j, check)
+                // the tap would land on something else than the checked button
+                HandResult.CHANGED -> finish(j, FAILED, "screen changed")
                 HandResult.FAILED -> finish(j, FAILED, "couldn't press it")
             }
         }
@@ -294,20 +308,22 @@ class ActionRunner(
     }
 
     /**
-     * type: find the field; always ask first, binding the yes to that field; after a yes the field
-     * found must be the same one; then the `type` pose, checked again, and the text set.
+     * type: find the field (focused, else by `into`) and always ask first (core [isRisky]: every
+     * type is), binding the yes to that field ([FieldSig]); after a yes, the `type` pose, then in one
+     * pass the field is looked up by that signature (not by focus: it may have moved) and checked
+     * again, and its text set. No field matching the signature: "screen changed".
      */
     private fun type(j: Job) {
         val h = hands() ?: return finish(j, FAILED, "no screen access")
-        val into = j.act.into
         val text = j.act.text.orEmpty()
-        val field = h.findField(into) ?: return finish(j, FAILED, "no text field")
-        if (j.confirmed) {
-            if (j.field != fieldSigOf(field.pkg, field.node)) return finish(j, FAILED, "screen changed")
-        } else if (isRisky(j.act, field.node)) {
-            j.field = fieldSigOf(field.pkg, field.node)
+        if (!j.confirmed) {
+            val field = h.findField(j.act.into) ?: return finish(j, FAILED, "no text field")
+            // nothing to tell this field from another by: no yes can be bound to it
+            val sig = fieldSigOf(field.pkg, field.node) ?: return finish(j, FAILED, "can't tell which field")
+            j.field = sig
             return ask(j, context.getString(R.string.ask_type) + "\n“" + preview(text, TYPE_PREVIEW_MAX) + "”") { type(j) }
         }
+        val sig = j.field ?: return finish(j, FAILED, "no text field")
         val b = body()
         if (b == null || !b.isShowing) return finish(j, FAILED, "hidden")
         b.setActPose("type")
@@ -316,14 +332,15 @@ class ActionRunner(
             if (!b.isShowing) return@later finish(j, FAILED, "hidden")
             var refused: Pair<String, String>? = null
             var changed = false
-            val result = h.setText(into, text) { pkg, node ->
+            val result = h.setText(text) { pkg, fields ->
                 refused = refusal(j.act, pkg)
-                changed = refused == null && j.confirmed && j.field != fieldSigOf(pkg, node)
-                refused == null && !changed
+                val pick = if (refused == null) bestField(sig, pkg, fields) else null
+                changed = refused == null && pick == null
+                pick
             }
             when (result) {
                 HandResult.DONE -> finish(j, DONE, null)
-                HandResult.NOT_FOUND -> finish(j, FAILED, "no text field")
+                HandResult.NOT_FOUND, HandResult.CHANGED -> finish(j, FAILED, "screen changed")
                 HandResult.REFUSED -> if (changed) finish(j, FAILED, "screen changed") else refuse(j, refused)
                 HandResult.FAILED -> finish(j, FAILED, "couldn't type")
             }
@@ -431,7 +448,27 @@ class ActionRunner(
         abs(a.left - b.left) <= SAME_PLACE_PX && abs(a.top - b.top) <= SAME_PLACE_PX &&
             abs(a.right - b.right) <= SAME_PLACE_PX && abs(a.bottom - b.bottom) <= SAME_PLACE_PX
 
-    private fun fieldSigOf(pkg: String?, field: UiNode) = FieldSig(pkg, field.viewId ?: field.description)
+    /** The field's id: its view id, else its hint or description (null: neither). */
+    private fun fieldId(field: UiNode): String? = field.viewId ?: field.description?.takeIf { it.isNotBlank() }
+
+    /** [field]'s signature, or null when it has neither an id nor bounds (then no yes can be bound to it). */
+    private fun fieldSigOf(pkg: String?, field: UiNode): FieldSig? {
+        val id = fieldId(field)
+        val bounds = field.bounds.takeIf { it.width > 0 && it.height > 0 }
+        return if (id == null && bounds == null) null else FieldSig(pkg, id, bounds)
+    }
+
+    /** The field of [fields] that [sig] describes (same app; same id when it had one; within ±48 px when it had bounds), nearest first. */
+    private fun bestField(sig: FieldSig, pkg: String?, fields: List<UiNode>): UiNode? {
+        if (pkg != sig.pkg) return null
+        val want = sig.bounds
+        return fields
+            .filter { (sig.id == null || fieldId(it) == sig.id) && (want == null || close(want, it.bounds)) }
+            .minByOrNull { f -> if (want == null) 0 else distance(want, f.bounds) }
+    }
+
+    private fun distance(a: Box, b: Box): Int =
+        abs(a.left - b.left) + abs(a.top - b.top) + abs(a.right - b.right) + abs(a.bottom - b.bottom)
 
     /** What a button says: its text (not a field's: that is what the user typed), else its description. */
     private fun labelOf(n: UiNode): String? =

@@ -76,6 +76,9 @@ enum class HandResult {
     /** The caller's check refused the node or the app it is in; nothing was done. */
     REFUSED,
 
+    /** What the action would really reach is not what was checked (e.g. a tap would land on another button); nothing was done. */
+    CHANGED,
+
     /** The node was found and allowed, but Android would not perform the action. */
     FAILED,
 }
@@ -107,7 +110,8 @@ interface PhoneHands {
     /**
      * The fallback for a button that won't take a click: finds [target] again in one pass and, when
      * [allow] accepts it (the caller compares its bounds too), dispatches a tap gesture at the
-     * centre of the matched node. DONE means the tap was sent; [onDone] then gets whether it
+     * centre of the matched node, unless the deepest node under that point is not part of the
+     * checked button (CHANGED). DONE means the tap was sent; [onDone] then gets whether it
      * completed (only called after DONE).
      */
     fun tap(target: String, allow: (String?, PressNode) -> Boolean, onDone: (Boolean) -> Unit): HandResult
@@ -118,8 +122,12 @@ interface PhoneHands {
      */
     fun findField(into: String?): FieldNode?
 
-    /** Finds the field again ([findField]) and, when [allow] accepts, sets its text to [text] (ACTION_SET_TEXT). */
-    fun setText(into: String?, text: String, allow: (String?, UiNode) -> Boolean): HandResult
+    /**
+     * Sets the text of the field [choose] picks, in one pass: it gets the active window's package and
+     * its text fields (never password fields) and returns one of them, or null to refuse. The
+     * field is checked again (editable, not a password field) right before ACTION_SET_TEXT.
+     */
+    fun setText(text: String, choose: (String?, List<UiNode>) -> UiNode?): HandResult
 
     /** Scrolls the largest scrollable node of the active window forward ([forward]) or backward, when [allow] accepts the package. */
     fun scroll(forward: Boolean, allow: (String?) -> Boolean): HandResult
