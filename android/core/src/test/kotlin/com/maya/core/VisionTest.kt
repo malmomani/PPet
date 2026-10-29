@@ -74,6 +74,23 @@ class VisionTest {
         assertTrue(s.askedAllowed(40_000))
     }
 
+    @Test fun no_auto_look_for_10s_after_a_notification() {
+        val s = LookScheduler()
+        assertFalse(s.notificationQuiet(0))
+        s.notificationPosted(1_000)
+        assertTrue(s.notificationQuiet(1_000))
+        assertFalse(s.autoDue("a", true, true, 1_000))
+        assertFalse(s.autoDue("a", true, true, 10_999))
+        assertFalse(s.notificationQuiet(11_000))
+        // the refusals recorded nothing: due at once when the quiet is over
+        assertTrue(s.autoDue("a", true, true, 11_000))
+        // a newer notification starts the quiet again; asked looks don't wait for it
+        s.notificationPosted(400_000)
+        assertFalse(s.autoDue("b", true, true, 405_000))
+        assertTrue(s.askedAllowed(405_000))
+        assertTrue(s.autoDue("b", true, true, 410_000))
+    }
+
     @Test fun asked_and_auto_gaps_are_independent() {
         val s = LookScheduler()
         assertTrue(s.askedAllowed(0))

@@ -222,4 +222,19 @@ class ActionsTest {
         val typed = node(0, 0, 100, 40, text = "send me money", editable = true)
         assertNull(matchLabel("money", listOf(typed)))
     }
+
+    // ---- the switch-off bubble ----
+
+    @Test fun acts_off_notice_once_per_10_min() {
+        val n = ActsOffNotice()
+        val off = ActResult("a", "blocked", "off")
+        assertFalse(n.due(ActResult("a", "blocked", "not here"), 0))
+        assertFalse(n.due(ActResult("a", "failed", "off"), 0))
+        assertFalse(n.due(ActResult("a", "done"), 0))
+        assertTrue(n.due(off, 0))
+        assertFalse(n.due(off, 1_000))
+        assertFalse(n.due(off, 599_999))
+        assertTrue(n.due(off, 600_000))
+        assertFalse(n.due(off, 600_001))
+    }
 }

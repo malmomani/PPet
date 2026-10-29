@@ -46,13 +46,21 @@ from .protocol import (
     UserMessage,
     UserShush,
     UserTap,
-    is_risky,
     parse_event,
 )
 from .reflection import Reflection
-from .thinker import BODY_QUIET_DETAIL, DIRECT_TRIGGERS, LOOK_TRIGGER, Context, Thinker, Thought, describe_body
+from .thinker import (
+    ACT_RESULT_TRIGGER,
+    BODY_QUIET_DETAIL,
+    LOOK_TRIGGER,
+    USER_MESSAGE_TRIGGER,
+    Context,
+    Thinker,
+    Thought,
+    describe_body,
+)
 from .tts import TTS, TTSError, speakable
-from .vision import Describer
+from .vision import Describer, VisionModelMissing
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +79,9 @@ TEASE_MOODS = {"happy", "curious", "excited"}
 BODY_THOUGHT_EVERY_S = (120, 240)
 BODY_CHAT_QUIET = timedelta(seconds=60)  # no silent body thought this soon after the user talked to or tapped her
 ACT_TIERS = {"friend", "close"}  # tiers that may do things on the phone by themselves
+# The only kinds she may do on her own: never press, type or web_search (those only when the user asks in a message).
+OWN_ACT_KINDS = frozenset({"open_app", "media", "timer", "alarm", "volume", "scroll"})
+VISION_MISSING_PAUSE = timedelta(minutes=30)  # automatic looks aren't described this long after a model-not-found
 SIGHT_LINE_MAX = 160
 SUMMARY_PART_MAX = 40
 PENDING_ACTS_MAX = 20  # acts still waiting for their act_result
@@ -131,6 +142,20 @@ _MEDIA_WORDS = {
     "previous": "go back to the previous song",
 }
 _VOLUME_WORDS = {"up": "turn the volume up", "down": "turn the volume down", "mute": "mute the sound"}
+# Why an act failed or was blocked on the phone (the act_result detail), in plain words.
+_DETAIL_WORDS = {
+    "off": "your phone-use switch is off",
+    "not here": "a private app was open",
+    "hidden": "you were hidden",
+    "busy": "you were busy doing something else on the phone",
+    "screen changed": "the screen changed",
+    "not on screen": "it wasn't on the screen",
+    "no screen access": "you have no screen access",
+    "android blocked it": "Android blocked it",
+    "locked": "the phone was locked",
+    "offline": "the phone lost its connection",
+    "took too long": "it took too long",
+}
 
 
 def summarize(act: Act) -> str:
@@ -165,7 +190,14 @@ def _act_result_line(act: Act, event: ActResultEvent) -> str:
         return f"the user said no to {summary}"
     if event.status == "timeout":
         return f"the user didn't answer when you asked to {summary}"
-    return f"you couldn't {summary}" + (f" ({event.detail})" if event.detail else "")
+    if not event.detail:
+        return f"you couldn't {summary}"
+    return f"you couldn't {summary} ({_DETAIL_WORDS.get(event.detail.lower(), event.detail)})"
+
+
+def _act_failed_detail(line: str) -> str:
+    """The prompt for a direct reply when something the user asked her to do on the phone didn't happen."""
+    return f"What the user asked you to do on the phone didn't happen: {line}. Tell them in a few words."
 
 
 class SeenScreen(NamedTuple):
@@ -202,7 +234,10 @@ class Mind:
         self.sight: SeenScreen | None = None  # the latest screenshot she saw, as words (RAM only)
         self._screen_changes = 0  # bumped when what's on screen changes (another app, app closed, screen off)
         self._seeing: set[asyncio.Task] = set()  # sights being taken in (kept alive when a describe is cancelled)
-        self._acts: dict[str, Act] = {}  # acts sent to the phone, by id, until their act_result arrives
+        # acts sent to the phone, by id, until their act_result arrives; True when the user asked for it in a message
+        self._acts: dict[str, tuple[Act, bool]] = {}
+        self._acts_off = False  # the phone-use switch was off: no acts of her own until the next Hello or a done
+        self._vision_paused_until: datetime | None = None  # automatic looks aren't described until then
         self.voice_mode = "off"  # from the latest Hello: off | replies | always
         self._voice_reply = False  # True while handling a UserMessage that was spoken
         self._voice_task: asyncio.Task | None = None
@@ -279,8 +314,12 @@ class Mind:
             if isinstance(event, SightFailedEvent):
                 await self._respond(self._ctx(LOOK_TRIGGER, COULDNT_SEE))
                 return
-            if isinstance(event, Hello):
+            if isinstance(event, ActResultEvent):
+                if await self._on_act_result(event):
+                    return
+            elif isinstance(event, Hello):
                 self._screen_on = None
+                self._acts_off = False
                 self.voice_mode = event.voice_mode
                 await self._emit_state()
             elif isinstance(event, Screen):
@@ -317,8 +356,6 @@ class Mind:
             elif isinstance(event, BodyMomentEvent):
                 if event.kind != "fell" or fall_counts:
                     self.memory.add_turn("event", _moment_line(event))
-            elif isinstance(event, ActResultEvent):
-                self._on_act_result(event)
             elif isinstance(event, OfflineSummary):
                 self._on_offline_summary(event)
             await self._maybe_initiate()
@@ -331,9 +368,12 @@ class Mind:
         image, event.image_b64 = event.image_b64, ""
         changes = self._screen_changes
         description = None
-        if self.describer is not None:
+        if self.describer is not None and (event.reason == "asked" or not self._vision_paused()):
             try:
                 description = await asyncio.wait_for(self.describer.describe(image), self.cfg.llm.timeout_s)
+            except VisionModelMissing as e:  # asked looks still try; automatic ones wait a while
+                self._vision_paused_until = self.clock.now() + VISION_MISSING_PAUSE
+                log.warning("%s Automatic looks are skipped for 30 minutes.", e)
             except Exception as e:  # a failure or a timeout: she just didn't see it
                 log.warning("describing a screenshot failed: %s", type(e).__name__)
         del image
@@ -366,12 +406,28 @@ class Mind:
             self.initiative.sighted(app)
             await self._maybe_initiate()
 
-    def _on_act_result(self, event: ActResultEvent) -> None:
-        act = self._acts.pop(event.act_id, None)
-        if act is None:
+    def _vision_paused(self) -> bool:
+        return self._vision_paused_until is not None and self.clock.now() < self._vision_paused_until
+
+    async def _on_act_result(self, event: ActResultEvent) -> bool:
+        """Remember how an act went. Returns True when she answered the user (an asked act that didn't happen)."""
+        pending = self._acts.pop(event.act_id, None)
+        if pending is None:
             log.debug("act_result for an unknown act")
-            return
-        self.memory.add_turn("event", _act_result_line(act, event))
+            return False
+        act, asked = pending
+        if event.status == "done":
+            self._acts_off = False
+        elif event.status == "blocked" and event.detail == "off":
+            if not self._acts_off:
+                log.info("the phone-use switch is off: no acts of her own until the phone reconnects")
+            self._acts_off = True
+        line = _act_result_line(act, event)
+        self.memory.add_turn("event", line)
+        if not asked or event.status == "done":
+            return False
+        await self._respond(self._ctx(ACT_RESULT_TRIGGER, _act_failed_detail(line)))
+        return True
 
     def _changes_screen(self, event: Event) -> bool:
         """Does this event replace what's on screen (so a screenshot taken before it is stale)?"""
@@ -498,8 +554,11 @@ class Mind:
         """
         before = (self.emotion.mood()[0], self.emotion.tier())
         tease_ok = self._tease_allowed()  # as offered to her in the prompt, before this thought changes her mood
-        own = trigger not in DIRECT_TRIGGERS and trigger != LOOK_TRIGGER  # not a reply to the user
-        act_ok = thought.act is not None and (not own or self._own_act_allowed(thought.act))
+        # Only a message from the user asks her to act or look; anything else (a tap, the answer to a look,
+        # her own idea) follows the own-initiative rules, and a silent body thought never acts.
+        asked = trigger == USER_MESSAGE_TRIGGER
+        act = thought.act if trigger != "body" else None
+        act_ok = act is not None and (asked or self._own_act_allowed(act))
         if thought.mood:
             self.emotion.set_mood(thought.mood, thought.mood_intensity)
         if closeness:
@@ -513,30 +572,32 @@ class Mind:
         if thought.move is not None:
             await self._move(thought.move.intent, thought.move.target, tease_ok)
         if act_ok:
-            await self._act(Act(**thought.act.fields()), own)
-        if thought.look and trigger in DIRECT_TRIGGERS:
-            # Only when the user is talking to her: the phone answers with an "asked" sight, which she replies to.
+            await self._act(Act(**act.fields()), asked)
+        if thought.look and asked:
+            # Only when the user messaged her: the phone answers with an "asked" sight, which she replies to.
             await self._emit(Look())
         if (self.emotion.mood()[0], self.emotion.tier()) != before:
             await self._emit_state()
         return spoke
 
     def _own_act_allowed(self, act: ActChoice) -> bool:
-        """Her own idea to use the phone: only as a friend, while the user can see it, never risky, a few per hour."""
+        """Her own idea to use the phone: only harmless kinds, as a friend, while the user can see it, a few per hour,
+        and not while the phone-use switch is off."""
         return (
-            self.emotion.tier() in ACT_TIERS
+            act.kind in OWN_ACT_KINDS
+            and not self._acts_off
+            and self.emotion.tier() in ACT_TIERS
             and self._can_be_heard()
-            and not is_risky(act)
             and self.initiative.act_ready()  # not quiet hours, not shushed, under the hourly limit
         )
 
-    async def _act(self, act: Act, own: bool) -> None:
-        self._acts[act.id] = act
+    async def _act(self, act: Act, asked: bool) -> None:
+        self._acts[act.id] = (act, asked)
         while len(self._acts) > PENDING_ACTS_MAX:
             del self._acts[next(iter(self._acts))]
-        if own:
+        if not asked:
             self.initiative.acted()
-        log.info("act %s (%s)", act.kind, "her own idea" if own else "a reply")
+        log.info("act %s (%s)", act.kind, "asked by the user" if asked else "her own idea")
         await self._emit(act)
 
     async def _move(self, intent: str, target: str | None, tease_ok: bool) -> None:

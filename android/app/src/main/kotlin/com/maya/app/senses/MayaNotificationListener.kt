@@ -17,13 +17,16 @@ import java.time.Instant
  * Notices who messages the user. Needs the special "Notification access" permission. Only the
  * app, category, flags, title, conversation title and the last MessagingStyle sender's name are
  * read: never EXTRA_TEXT, EXTRA_BIG_TEXT, EXTRA_SUB_TEXT or any message text. Does nothing unless
- * MayaService is running with the sense on ([NotificationBridge.sink] set). Filtering happens in
+ * MayaService is running with the sense on ([NotificationBridge.sink] set), besides telling it
+ * that something was posted ([NotificationBridge.posted], nothing about it). Filtering happens in
  * MayaService (core's NotificationFilter). Callbacks arrive on the main thread.
  */
 class MayaNotificationListener : NotificationListenerService() {
     private val labels = HashMap<String, String>()
 
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
+        // Its banner may show message text: no automatic screenshot for a moment (Maya's own don't count).
+        if (sbn != null && sbn.packageName != packageName) NotificationBridge.posted()
         if (sbn == null || NotificationBridge.sink == null) return
         val info = try {
             if (isSilent(sbn, rankingMap)) null else read(sbn)

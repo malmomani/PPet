@@ -31,7 +31,9 @@ import com.maya.app.senses.ScreenSink
 import com.maya.app.senses.realScreenSize
 import com.maya.app.voice.VoicePlayer
 import com.maya.core.Act
+import com.maya.core.ActResult
 import com.maya.core.Action
+import com.maya.core.ActsOffNotice
 import com.maya.core.AppOpened
 import com.maya.core.Audio
 import com.maya.core.DoNotWatch
@@ -96,6 +98,10 @@ class MayaService : Service() {
     private var deviceSense: DeviceSense? = null
     /** Our [NotificationBridge.sink] (it owns this run's NotificationFilter); null while the sense is off. */
     private var notificationSink: ((NotificationInfo) -> Unit)? = null
+    /** Our [NotificationBridge.onPosted] (a notification was posted: no automatic look for a moment); null while the screen sense is off. */
+    private var notificationPosted: (() -> Unit)? = null
+    /** The "turn on Let Maya use my phone" bubble after an act blocked "off", at most once per 10 min. */
+    private val actsOffNotice = ActsOffNotice()
     private var voicePlayer: VoicePlayer? = null
     /** Runs the brain's `act` actions ("Let Maya use my phone"; it checks the switch itself). */
     private var actions: ActionRunner? = null
@@ -225,7 +231,7 @@ class MayaService : Service() {
         actions = ActionRunner(
             this,
             prefs,
-            ::emit,
+            ::emitActResult,
             body = { overlayBody },
             // press/type/scroll need Screen access and "Let Maya read my screen"
             hands = { if (screenSink != null) ScreenBridge.hands else null },
@@ -386,7 +392,12 @@ class MayaService : Service() {
         if (prefs.readScreen) {
             // The accessibility service (Screen access) reports on the main thread.
             glanceScheduler = GlanceScheduler()
-            lookScheduler = LookScheduler()
+            val looks = LookScheduler()
+            lookScheduler = looks
+            // Heard from the notification listener (when Notification access is on), whatever the messages switch says.
+            val posted = { looks.notificationPosted(SystemClock.elapsedRealtime()) }
+            notificationPosted = posted
+            NotificationBridge.onPosted = posted
             val sink = object : ScreenSink {
                 override fun onLayout(pkg: String, layout: Layout, keyboardTop: Int?) = onScreenLayout(pkg, layout, keyboardTop)
 
@@ -408,6 +419,8 @@ class MayaService : Service() {
         // Only clear our own sink, never one a newer service instance already set.
         if (NotificationBridge.sink === notificationSink) NotificationBridge.sink = null
         notificationSink = null
+        if (NotificationBridge.onPosted === notificationPosted) NotificationBridge.onPosted = null
+        notificationPosted = null
         main.removeCallbacks(glanceTick)
         if (ScreenBridge.sink === screenSink) {
             ScreenBridge.sink = null
@@ -583,6 +596,8 @@ class MayaService : Service() {
             if (s.asked) emit(SightFailed("error"))
             return
         }
+        // A notification came in meanwhile: its banner may be in the picture.
+        if (!s.asked && lookScheduler?.notificationQuiet(SystemClock.elapsedRealtime()) == true) return
         val source = ScreenBridge.service
         if (lookablePkg() != s.pkg || source == null) {
             if (s.asked) emit(SightFailed("blocked"))
@@ -681,6 +696,19 @@ class MayaService : Service() {
         val clip = heldAudio ?: return
         heldAudio = null
         if (!overlayHidden && !autoHidden) voicePlayer?.play(clip.refId, clip.dataB64)
+    }
+
+    /**
+     * An action's result goes to the brain; when it was blocked because "Let Maya use my phone" is
+     * off, she also says so in her bubble (at most once per 10 minutes, only while she's on screen).
+     */
+    private fun emitActResult(e: Event) {
+        emit(e)
+        val o = overlay ?: return
+        if (e !is ActResult || overlayHidden || autoHidden) return
+        if (actsOffNotice.due(e, SystemClock.elapsedRealtime())) {
+            o.handle(Say(getString(R.string.bubble_acts_off), ACTS_OFF_BUBBLE_MS))
+        }
     }
 
     private fun onAction(a: Action) {
@@ -785,6 +813,8 @@ class MayaService : Service() {
         private const val GLANCE_TICK_MS = 1000L
         /** An asked look the system has not answered within this long has failed. */
         private const val SHOT_TIMEOUT_MS = 3000L
+        /** How long the "turn on Let Maya use my phone" bubble shows. */
+        private const val ACTS_OFF_BUBBLE_MS = 6000L
         /** A glance's line count counts for the picture-heavy rule this long. */
         private const val GLANCE_LINES_MAX_AGE_MS = 60_000L
         private const val SYSTEM_UI = "com.android.systemui"

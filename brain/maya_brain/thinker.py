@@ -23,9 +23,11 @@ from .protocol import (
 
 log = logging.getLogger(__name__)
 
-DIRECT_TRIGGERS = {"user_message", "user_tap"}
+USER_MESSAGE_TRIGGER = "user_message"  # the only trigger that counts as the user asking her to act or look
+DIRECT_TRIGGERS = {USER_MESSAGE_TRIGGER, "user_tap"}
 LOOK_TRIGGER = "look"  # the answer to a look the user asked for: a reply, like a message
-REPLY_TRIGGERS = DIRECT_TRIGGERS | {LOOK_TRIGGER}  # she must say something
+ACT_RESULT_TRIGGER = "act_result"  # something the user asked her to do on the phone didn't happen: she says so
+REPLY_TRIGGERS = DIRECT_TRIGGERS | {LOOK_TRIGGER, ACT_RESULT_TRIGGER}  # she must say something
 LOG_REPLY_CHARS = 500
 
 MAX_SAY = 300
@@ -49,7 +51,9 @@ ACT_RULE = (
     '- "act" (object or null): do something on the phone: {"kind": ..., fields}. Kinds: open_app {app}, '
     "media {key: play_pause|next|previous}, timer {seconds 5-86400, label?}, alarm {hour, minute, label?}, "
     "volume {dir: up|down|mute}, web_search {query}, scroll {dir: up|down}, press {target: a button's label}, "
-    "type {text, into?}. Risky ones (pressing send, buy, delete..., or typing) are confirmed by the user first."
+    "type {text, into?}. Only press, type or web_search when the user asked you to in a message; "
+    "on your own only open_app, media, timer, alarm, volume or scroll. "
+    "Risky ones (pressing send, buy, delete..., or typing) are confirmed by the user first."
 )
 
 _DOING_WORDS = {

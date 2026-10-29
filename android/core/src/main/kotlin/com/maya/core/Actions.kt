@@ -82,6 +82,22 @@ fun blockedReason(
     return if (pkg in NEVER_PACKAGES || pkg == ownPackage || doNotWatch(pkg)) "not here" else null
 }
 
+/**
+ * The "turn on Let Maya use my phone" bubble: due when an act was blocked "off" (the switch), at
+ * most once per [gapMs]. Pure timing logic: the caller supplies the clock.
+ */
+class ActsOffNotice(private val gapMs: Long = 600_000) {
+    private var lastMs: Long? = null
+
+    /** True (and recorded) when [result] is blocked "off" and the bubble wasn't shown in the last [gapMs]. */
+    fun due(result: ActResult, nowMs: Long): Boolean {
+        if (result.status != "blocked" || result.detail != "off") return false
+        lastMs?.let { if (nowMs - it < gapMs) return false }
+        lastMs = nowMs
+        return true
+    }
+}
+
 private const val APP_MATCH_MIN = 0.8
 private const val APP_PREFIX_MIN = 3
 private val NOT_LETTER_OR_DIGIT = Regex("[^\\p{L}\\p{N}]+")

@@ -129,3 +129,24 @@ async def test_describe_openai_think_kwargs_and_stray_closing_think():
     cfg.llm.base_url = "https://api.openai.com/v1"
     await make_describer(cfg, transport=httpx.MockTransport(handler)).describe(IMG)
     assert "chat_template_kwargs" not in bodies[1]
+
+
+async def test_describe_logs_only_the_status(caplog):
+    caplog.set_level(logging.DEBUG)
+    d = make_describer(cfg_for("ollama"), transport=httpx.MockTransport(lambda r: httpx.Response(503, text="SECRET-BODY")))
+    assert await d.describe(IMG) is None
+    assert "HTTP 503" in caplog.text and "SECRET-BODY" not in caplog.text
+
+
+async def test_describe_model_missing_names_the_model_and_the_fix():
+    import pytest
+
+    from maya_brain.vision import VisionModelMissing
+
+    missing = httpx.MockTransport(lambda r: httpx.Response(404, json={"error": "model 'gemma3:4b' not found"}))
+    with pytest.raises(VisionModelMissing) as exc:
+        await make_describer(cfg_for("ollama"), transport=missing).describe(IMG)
+    assert "'gemma3:4b'" in str(exc.value) and "ollama pull gemma3:4b" in str(exc.value)
+    with pytest.raises(VisionModelMissing) as exc:
+        await make_describer(cfg_for("openai", model="vis"), transport=missing).describe(IMG)
+    assert "'vis'" in str(exc.value) and "maya.toml" in str(exc.value)

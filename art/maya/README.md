@@ -56,7 +56,7 @@ There are no semi-transparent pixels or embedded ICC color profile.
 Rows 0-11 retain every original RGBA pixel. All 43 original individual frame PNGs
 also retain their original file bytes. Twenty-nine new frames occupy rows 12-20.
 
-The new poses use the anchor rules in source/MISSING_POSES_BRIEF.md:
+The new poses use the anchor rules in MISSING_POSES_BRIEF.md:
 grounded frames contact y = 60, perch seats at y = 59 with short boot tips below,
 and held frames hang from the ribbon near (32, 6) with their boots above ground.
 Jump translation is handled by the app; the frames contain the body motion.

@@ -321,7 +321,7 @@ class ActionRunner(
             // nothing to tell this field from another by: no yes can be bound to it
             val sig = fieldSigOf(field.pkg, field.node) ?: return finish(j, FAILED, "can't tell which field")
             j.field = sig
-            return ask(j, context.getString(R.string.ask_type) + "\n“" + preview(text, TYPE_PREVIEW_MAX) + "”") { type(j) }
+            return ask(j, typeQuestion(text, field.hasText)) { type(j) }
         }
         val sig = j.field ?: return finish(j, FAILED, "no text field")
         val b = body()
@@ -430,6 +430,17 @@ class ActionRunner(
         val riskyLabel = (listOf(found.node) + found.subtree).firstOrNull { isRisky(act, it) && labelOf(it) != null }
         val label = riskyLabel?.let { labelOf(it) } ?: labelOf(found.node) ?: act.target.orEmpty()
         return context.getString(R.string.ask_press, clip(label, PRESS_LABEL_MAX))
+    }
+
+    /**
+     * "Can I type that?" with the start of [text] (at most [TYPE_PREVIEW_MAX] chars), its length, and
+     * that it replaces what the field holds when [replaces].
+     */
+    private fun typeQuestion(text: String, replaces: Boolean): String {
+        val n = text.codePointCount(0, text.length)
+        val count = context.resources.getQuantityString(R.plurals.ask_type_count, n, n)
+        val question = context.getString(R.string.ask_type) + "\n“" + preview(text, TYPE_PREVIEW_MAX) + "” " + count
+        return if (replaces) question + "\n" + context.getString(R.string.ask_type_replaces) else question
     }
 
     /** A press is risky when anything its click presses is (core [isRisky]): the button and every node inside it. */
@@ -601,7 +612,7 @@ class ActionRunner(
         private const val PASS_THROUGH_LEAD_MS = 150L
         private const val PASS_THROUGH_MS = 600L
         private const val PRESS_LABEL_MAX = 30
-        private const val TYPE_PREVIEW_MAX = 60
+        private const val TYPE_PREVIEW_MAX = 150
         private const val GOOGLE_SEARCH = "https://www.google.com/search?q="
         /** A started app must be in front this long after the start, else Android blocked it. */
         private const val LAUNCH_CHECK_MS = 1500L

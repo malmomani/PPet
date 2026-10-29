@@ -356,7 +356,12 @@ class MayaAccessibilityService : AccessibilityService(), GlanceSource, PhoneHand
         }
     }
 
-    override fun findField(into: String?): FieldNode? = withLiveTree { pass -> fieldOf(pass, into)?.let { FieldNode(it.ui, pass.pkg) } }
+    override fun findField(into: String?): FieldNode? = withLiveTree { pass ->
+        fieldOf(pass, into)?.let { FieldNode(it.ui, pass.pkg, hasText(it.info)) }
+    }
+
+    /** Whether a field holds text (not its hint); only its emptiness is looked at, never the text. */
+    private fun hasText(info: AccessibilityNodeInfo): Boolean = !info.text.isNullOrEmpty() && !info.isShowingHintText
 
     override fun setText(text: String, choose: (String?, List<UiNode>) -> UiNode?): HandResult = withLiveTree { pass ->
         val fields = pass.nodes.filter { it.field }

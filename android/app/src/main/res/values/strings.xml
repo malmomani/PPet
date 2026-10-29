@@ -68,8 +68,14 @@
     <string name="bubble_no_recognizer">I can\'t hear you — this phone has no speech recognizer</string>
     <string name="bubble_offline_missing">I can\'t hear you — set up offline English speech in my settings</string>
     <string name="bubble_recognition_failed">I can\'t hear you — speech recognition failed, try again</string>
+    <string name="bubble_acts_off">Turn on “Let Maya use my phone” in my settings</string>
 
     <!-- Her confirm bubble (with ✔ and ✖) before a risky action -->
     <string name="ask_press">Can I press %1$s?</string>
     <string name="ask_type">Can I type that?</string>
+    <plurals name="ask_type_count">
+        <item quantity="one">(%1$d character)</item>
+        <item quantity="other">(%1$d characters)</item>
+    </plurals>
+    <string name="ask_type_replaces">It replaces what\'s there.</string>
 </resources>

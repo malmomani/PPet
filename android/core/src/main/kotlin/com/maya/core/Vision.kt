@@ -30,22 +30,33 @@ fun isPictureHeavy(images: List<Box>, screenW: Int, screenH: Int, textLines: Int
 
 /**
  * Limits how often she may look at the screen. An automatic look needs a picture-heavy screen and
- * permission, and is at most once per [autoGapMs] overall and once per [perAppGapMs] per app; an
- * asked look ignores those and is at most once per [askedGapMs]. Pure timing logic: the caller
- * supplies the clock.
+ * permission, and is at most once per [autoGapMs] overall and once per [perAppGapMs] per app, and
+ * never within [notificationQuietMs] after a notification was posted (its banner may show message
+ * text); an asked look ignores those and is at most once per [askedGapMs]. Pure timing logic: the
+ * caller supplies the clock.
  */
 class LookScheduler(
     private val autoGapMs: Long = 300_000,
     private val perAppGapMs: Long = 600_000,
     private val askedGapMs: Long = 20_000,
+    private val notificationQuietMs: Long = 10_000,
 ) {
     private var lastAutoMs: Long? = null
     private val lastAutoByApp = HashMap<String, Long>()
     private var lastAskedMs: Long? = null
+    private var lastNotificationMs: Long? = null
+
+    /** A notification was posted at [nowMs]: no automatic look for the next [notificationQuietMs]. */
+    fun notificationPosted(nowMs: Long) {
+        lastNotificationMs = nowMs
+    }
+
+    /** True while a notification posted less than [notificationQuietMs] ago may still be on screen. */
+    fun notificationQuiet(nowMs: Long): Boolean = lastNotificationMs?.let { nowMs - it < notificationQuietMs } ?: false
 
     /** True (and recorded, globally and for [pkg]) when an automatic look is due; false records nothing. */
     fun autoDue(pkg: String, pictureHeavy: Boolean, allowed: Boolean, nowMs: Long): Boolean {
-        if (!allowed || !pictureHeavy) return false
+        if (!allowed || !pictureHeavy || notificationQuiet(nowMs)) return false
         lastAutoMs?.let { if (nowMs - it < autoGapMs) return false }
         lastAutoByApp[pkg]?.let { if (nowMs - it < perAppGapMs) return false }
         lastAutoMs = nowMs

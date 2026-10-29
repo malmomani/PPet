@@ -182,7 +182,15 @@ The Android app that shows Maya on your phone has its own install and pairing gu
 
 When the phone shows mostly pictures, or when you ask Maya to look ("look at this"), the app sends her a screenshot. The brain has the vision model (`[vision]` in `maya.toml`) describe it in a few words, without holding up the chat, and then drops the picture: it is never written to disk or logged. Maya keeps the description in mind for about 10 minutes and remembers "you looked at …" in her conversation history. If vision is off or fails, she simply doesn't see it (when you asked, she tells you).
 
-She can also do small things on the phone: open an app, play/pause or skip music, set a timer or an alarm, change the volume, search the web, scroll, press a button and type text. The phone's "Let Maya use my phone" switch is off by default, and the phone asks you first before anything risky (pressing send, buy, delete…, or typing). When you ask her, she just does it (the phone still asks about risky ones). On her own she only does harmless things, only once she is your friend, never in quiet hours or after you shushed her, and at most 10 times an hour. She remembers how each one went.
+With Ollama (the default) the vision model is `gemma3:4b`; pull it once:
+
+```
+ollama pull gemma3:4b
+```
+
+On an 8 GB GPU it doesn't fit next to `qwen3:8b`, so Ollama swaps the two models in and out: each look then takes a few extra seconds, while chat goes on. If the vision model isn't there (HTTP 404), the brain logs a warning naming the model and the command above, and skips her automatic looks for 30 minutes (looks you ask for still try).
+
+She can also do small things on the phone: open an app, play/pause or skip music, set a timer or an alarm, change the volume, search the web, scroll, press a button and type text. The phone's "Let Maya use my phone" switch is off by default, and the phone asks you first before anything risky (pressing send, buy, delete…, or typing). When you ask her in a message (typed or spoken), she just does it (the phone still asks about risky ones). On her own (also when you only tap her, or when she answers a look) she only opens apps, controls music and volume, sets timers and alarms, or scrolls: never presses, types or searches the web. She does that only once she is your friend, never in quiet hours or after you shushed her, at most 10 times an hour, and not at all after the phone said its "Let Maya use my phone" switch is off (until the phone reconnects or something you asked for works). She remembers how each one went, and when something you asked for didn't happen, she tells you.
 
 ## Privacy
 

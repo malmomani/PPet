@@ -107,6 +107,14 @@ New-NetFirewallRule -DisplayName "Maya brain" -Direction Inbound -Protocol TCP -
 
 Then make sure your Wi-Fi is set to **Private**: Settings → Network & internet → Wi-Fi → your network → Private network.
 
+**Looking at pictures (optional).** For Maya to see the photos and videos on your screen (Android 11+, see the [app guide](android/README.md#10-maya-looks-at-pictures)), pull the vision model once:
+
+```
+ollama pull gemma3:4b
+```
+
+On an 8 GB GPU it swaps with `qwen3:8b`, so each look takes a few seconds longer. Without it she only reads the text on screen (the brain window warns you the first time she tries to look).
+
 **Bigger brain (optional).** The default model (`qwen3:8b` on Ollama) works on most PCs. With a strong PC (for example an RTX 3070 8 GB and 32 GB of RAM) you can give Maya a much bigger model that can also look at pictures, using llama.cpp's `llama-server`. The full steps are in [`brain/README.md`](brain/README.md#bigger-brain-with-llama-server-optional).
 
 ---
@@ -196,7 +204,11 @@ More is in [`android/README.md#troubleshooting`](android/README.md#troubleshooti
 
 ## Privacy
 
-- Everything stays between your phone and **your own PC**. The AI runs locally through Ollama (or llama-server). Pointing the brain at a cloud AI service in `maya.toml` would send her prompts there; the default does not.
+- By default her thinking stays between your phone and **your own PC**: the AI runs locally through Ollama (or llama-server). The exceptions:
+  - **Cloud AI providers:** pointing the brain at an online AI service in `maya.toml` sends her prompts (your messages, what's on screen, her memories) and the screenshots to that service. The default does not.
+  - **Google voice typing:** with **Allow Google voice typing** on, what you say to her may be turned into text online by Google. Switch it off in her settings to use only the phone's offline recognizer.
+  - **Screenshots:** when she looks at the screen, the picture is held in memory only (phone and PC), described by the vision model and thrown away; it is never saved or logged. Only a short description (at most 160 characters) stays in her memory.
+  - **Web search:** when she searches the web for you, the search words go to Google (or the phone's search app), like any search you type.
 - **Never use a router port-forward** to reach the brain from outside. Use Tailscale instead.
 - **Notifications:** she sees only the app name and sender, never the message text.
 - **Screen:** she never reads passwords, what you type, do-not-watch apps or the lock screen. Only a short headline per glance goes into her memory; the full text is never saved.

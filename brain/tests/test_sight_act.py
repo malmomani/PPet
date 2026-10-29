@@ -28,6 +28,7 @@ from maya_brain.protocol import (
     UserDrag,
     UserMessage,
     UserShush,
+    UserTap,
     is_risky,
     parse_act,
     parse_event,
@@ -530,7 +531,6 @@ async def test_own_initiative_never_risky(seer):
     assert await own_act(seer, {"kind": "press", "target": "Send"}) == []
     assert await own_act(seer, {"kind": "press", "target": "Buy now"}) == []
     assert await own_act(seer, {"kind": "type", "text": "hello"}) == []
-    assert len(await own_act(seer, {"kind": "press", "target": "like"})) == 1
     assert len(await own_act(seer, {"kind": "scroll", "dir": "down"})) == 1
     # the rest of the thought is kept
     seer.initiative._set_urge(100)
@@ -561,12 +561,147 @@ async def test_user_asked_act_passes_and_risky_allowed(seer, sent, clock):
     got = acts(sent)
     assert [(a.kind, a.target, a.text) for a in got] == [("press", "Send", None), ("type", None, "on my way")]
     assert len(seer.initiative._acts) == 10  # replies to the user don't count
-    # an asked look's answer counts as a reply to the user too
-    script(seer, reply(say="playing", act={"kind": "media", "key": "play_pause"}))
-    await seer.handle_sight(sight(reason="asked"))
-    assert acts(sent)[-1].key == "play_pause"
     # the act goes out after the say
     assert isinstance(sent[sent.index(got[0]) - 1], Say)
+    # an asked look's answer is not a message: own-initiative rules (here: a stranger, shushed, quiet hours)
+    script(seer, reply(say="playing", act={"kind": "media", "key": "play_pause"}))
+    await seer.handle_sight(sight(reason="asked"))
+    assert says(sent)[-1] == "playing" and len(acts(sent)) == 2
+
+
+OWN_KINDS = [
+    {"kind": "open_app", "app": "YouTube"},
+    {"kind": "media", "key": "next"},
+    {"kind": "timer", "seconds": 600},
+    {"kind": "alarm", "hour": 7, "minute": 30},
+    {"kind": "volume", "dir": "down"},
+    {"kind": "scroll", "dir": "down"},
+]
+NEVER_OWN = [
+    {"kind": "press", "target": "like"},  # not risky, but a press all the same
+    {"kind": "press", "target": "Send"},
+    {"kind": "type", "text": "hello"},
+    {"kind": "web_search", "query": "cat videos"},
+]
+
+
+async def test_own_initiative_only_harmless_kinds(seer):
+    friend(seer, "close")
+    for act in NEVER_OWN:
+        assert await own_act(seer, act) == [], act
+    for act in OWN_KINDS:
+        assert len(await own_act(seer, act)) == 1, act
+
+
+async def tapped(mind, act=None, look=False):
+    """One reply to a tap carrying `act` / `look`; returns everything it emitted."""
+    mind._last_tap_think = None
+    script(mind, reply(say="hi!", act=act, look=look))
+    out = []
+    mind.set_sink(lambda a: _collect(out, a))
+    await mind.handle(UserTap())
+    return out
+
+
+async def test_tap_and_look_reply_follow_own_initiative_rules(seer):
+    friend(seer, "close")
+    # a tap is not the user asking: no press, type or web_search, and no look
+    for act in NEVER_OWN:
+        assert acts(await tapped(seer, act)) == [], act
+    out = await tapped(seer, look=True)
+    assert says(out) == ["hi!"] and looks(out) == []
+    assert len(acts(await tapped(seer, TIMER))) == 1
+    assert len(seer.initiative._acts) == 1  # counted as her own
+    # a stranger's tap: nothing at all
+    friend(seer, "stranger")
+    assert acts(await tapped(seer, TIMER)) == []
+    # the answer to an asked look: the same rules
+    friend(seer, "close")
+    for act in NEVER_OWN:
+        script(seer, reply(say="cute", act=act, look=True))
+        out = []
+        seer.set_sink(lambda a: _collect(out, a))
+        await seer.handle_sight(sight(reason="asked"))
+        assert says(out) == ["cute"] and acts(out) == [] and looks(out) == [], act
+    # only a message asks: press, type and web_search go out, and so does a look
+    sent = []
+    seer.set_sink(lambda a: _collect(sent, a))
+    friend(seer, "stranger")
+    for act in NEVER_OWN:
+        script(seer, reply(say="ok", act=act))
+        await seer.handle(UserMessage(text="do it"))
+    script(seer, reply(say="show me", look=True))
+    await seer.handle(UserMessage(text="look"))
+    assert [a.kind for a in acts(sent)] == ["press", "press", "type", "web_search"] and len(looks(sent)) == 1
+
+
+async def test_body_thought_never_acts(seer, clock):
+    from maya_brain.protocol import BodyEvent
+
+    friend(seer, "close")
+    await seer.handle(Screen(on=True))
+    await seer.handle(BodyEvent(doing="sit", where="floor", x=0.5, y=0.9))
+    out = []
+    seer.set_sink(lambda a: _collect(out, a))
+    seer._next_body_at = clock.now()  # due now
+    script(seer, reply(say="", speak=False, act=TIMER, look=True, animation="sit"))
+    await seer.tick()
+    assert [r[0] for r in seer.memory.db.execute("select trigger from thoughts")] == ["body"]  # it ran
+    assert acts(out) == [] and looks(out) == [] and seer.initiative._acts == []
+
+
+async def test_acts_off_pauses_own_acts_until_hello_or_done(seer, sent):
+    from maya_brain.protocol import Hello
+
+    friend(seer, "close")
+    got = await own_act(seer, TIMER)
+    await seer.handle(ActResultEvent(act_id=got[0].id, status="blocked", detail="off"))
+    assert turns(seer)[-1] == 'you couldn\'t set a 10-minute timer for "tea" (your phone-use switch is off)'
+    assert await own_act(seer, TIMER) == []  # paused
+    await seer.handle(Hello(client_version="1", screen_w=1080, screen_h=2400))
+    got = await own_act(seer, TIMER)  # the phone reconnected: worth another try
+    assert len(got) == 1
+    await seer.handle(ActResultEvent(act_id=got[0].id, status="blocked", detail="off"))
+    assert await own_act(seer, TIMER) == []
+    # an asked act that is done means the switch is on again
+    seer.set_sink(lambda a: _collect(sent, a))
+    script(seer, reply(say="ok", act={"kind": "media", "key": "next"}))
+    await seer.handle(UserMessage(text="next song"))
+    await seer.handle(ActResultEvent(act_id=acts(sent)[-1].id, status="done"))
+    assert len(await own_act(seer, TIMER)) == 1
+    # other failures don't pause her
+    got = await own_act(seer, TIMER)
+    await seer.handle(ActResultEvent(act_id=got[0].id, status="failed", detail="no clock app"))
+    assert len(await own_act(seer, TIMER)) == 1
+
+
+async def test_asked_act_that_didnt_happen_gets_an_answer(seer, sent):
+    for status, detail in (("blocked", "off"), ("failed", "not on screen"), ("declined", None), ("timeout", None)):
+        sent.clear()
+        script(seer, reply(say="okay!", act={"kind": "press", "target": "Like"}), reply(say="hmm, that didn't work"))
+        await seer.handle(UserMessage(text="press like"))
+        await seer.handle(ActResultEvent(act_id=acts(sent)[-1].id, status=status, detail=detail))
+        assert says(sent) == ["okay!", "hmm, that didn't work"], status
+        assert "Now: What the user asked you to do on the phone didn't happen: " in last_user_prompt(seer)
+    assert "(your phone-use switch is off)" not in last_user_prompt(seer).split("Now:")[1]  # the last was a timeout
+    # a silent answer is not allowed: she always says something
+    sent.clear()
+    script(seer, reply(say="ok", act=TIMER), reply(say="", speak=False), reply(say="sorry, no timer"))
+    await seer.handle(UserMessage(text="tea timer"))
+    await seer.handle(ActResultEvent(act_id=acts(sent)[-1].id, status="failed", detail="no clock app"))
+    assert says(sent) == ["ok", "sorry, no timer"]
+    assert "you couldn't set a 10-minute timer for \"tea\" (no clock app)" in seer.thinker.llm.calls[-1][1]["content"]
+    # done: no extra answer; her own acts that fail: no answer either
+    sent.clear()
+    script(seer, reply(say="ok", act=TIMER))
+    await seer.handle(UserMessage(text="tea timer"))
+    await seer.handle(ActResultEvent(act_id=acts(sent)[-1].id, status="done"))
+    assert says(sent) == ["ok"]
+    friend(seer)
+    got = await own_act(seer, TIMER)
+    calls = len(seer.thinker.llm.calls)
+    await seer.handle(ActResultEvent(act_id=got[0].id, status="failed", detail="no clock app"))
+    assert len(seer.thinker.llm.calls) == calls
 
 
 async def test_act_result_memory_wording(seer, sent):
@@ -587,11 +722,11 @@ async def test_act_result_memory_wording(seer, sent):
     assert summarize(Act(kind="type", text="hi", into="Search")) == 'type "hi" into Search'
 
     async def answer(act, status, detail=None):
-        script(seer, reply(say="ok", act=act))
+        script(seer, reply(say="ok", act=act), reply(say="oh well"))
         await seer.handle(UserMessage(text="do it"))
         act_id = acts(sent)[-1].id
         await seer.handle(ActResultEvent(act_id=act_id, status=status, detail=detail))
-        return turns(seer)[-1]
+        return turns(seer)[-1 if status == "done" else -2]  # she answers when it didn't happen
 
     assert await answer({"kind": "open_app", "app": "YouTube"}, "done") == "you open YouTube"
     assert await answer({"kind": "press", "target": "Send"}, "declined") == "the user said no to press Send"
@@ -600,10 +735,22 @@ async def test_act_result_memory_wording(seer, sent):
         == "the user didn't answer when you asked to type \"hi\""
     )
     assert await answer({"kind": "press", "target": "Like"}, "failed", "not on screen") == (
-        "you couldn't press Like (not on screen)"
+        "you couldn't press Like (it wasn't on the screen)"
     )
-    assert await answer({"kind": "timer", "seconds": 600}, "blocked", "off") == "you couldn't set a 10-minute timer (off)"
+    assert await answer({"kind": "timer", "seconds": 600}, "blocked", "off") == (
+        "you couldn't set a 10-minute timer (your phone-use switch is off)"
+    )
     assert await answer({"kind": "scroll", "dir": "up"}, "failed") == "you couldn't scroll up"
+    for detail, words in (
+        ("not here", "a private app was open"),
+        ("hidden", "you were hidden"),
+        ("busy", "you were busy doing something else on the phone"),
+        ("screen changed", "the screen changed"),
+        ("no screen access", "you have no screen access"),
+        ("android blocked it", "Android blocked it"),
+        ("no clock app", "no clock app"),  # anything else as it came
+    ):
+        assert await answer({"kind": "scroll", "dir": "up"}, "failed", detail) == f"you couldn't scroll up ({words})"
     urge = seer.initiative.urge
     n = len(turns(seer))
     await seer.handle(ActResultEvent(act_id="unknown", status="done"))  # not hers: ignored
@@ -780,6 +927,41 @@ async def test_look_and_act_offered_in_prompt(thinker):
         system = (await thinker.build_messages(Context(trigger, "d")))[0]["content"]
         assert LOOK_RULE in system and ACT_RULE in system
     assert ACT_RULE.count("\n") == 0 and "confirmed by the user" in ACT_RULE
+    assert "Only press, type or web_search when the user asked you to in a message" in ACT_RULE
     assert "only when the user asks you to look" in LOOK_RULE
     for kind in ACT_KINDS:
         assert f"{kind} {{" in ACT_RULE
+
+
+async def test_missing_vision_model_pauses_auto_looks(seer, sent, clock, caplog):
+    from maya_brain.vision import VisionModelMissing
+
+    class Missing:
+        def __init__(self):
+            self.calls = 0
+
+        async def describe(self, image_b64):
+            self.calls += 1
+            raise VisionModelMissing("vision model 'gemma3:4b' not found (HTTP 404): pull it with `ollama pull gemma3:4b`.")
+
+    seer.describer = missing = Missing()
+    with caplog.at_level(logging.WARNING):
+        await seer.handle_sight(sight(image="SECRETPIXELS"))
+    assert missing.calls == 1 and seer.sight is None and sent == []
+    assert "ollama pull gemma3:4b" in caplog.text and "30 minutes" in caplog.text and "SECRETPIXELS" not in caplog.text
+    # automatic looks are not even described for 30 minutes...
+    clock.advance(timedelta(minutes=29))
+    await seer.handle_sight(sight())
+    assert missing.calls == 1 and seer.sight is None and sent == []
+    # ...but an asked one still tries (and she says she couldn't see)
+    script(seer, reply(say="it's blurry"))
+    await seer.handle_sight(sight(reason="asked"))
+    assert missing.calls == 2 and says(sent) == ["it's blurry"]
+    # the asked look's 404 started a new 30 minutes
+    clock.advance(timedelta(minutes=29))
+    await seer.handle_sight(sight())
+    assert missing.calls == 2
+    clock.advance(timedelta(minutes=1, seconds=1))
+    seer.describer = FakeDescriber(["a dog"])
+    await seer.handle_sight(sight())
+    assert seer.sight is not None and seer.sight.description == "a dog"

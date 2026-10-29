@@ -62,8 +62,11 @@ interface GlanceSource {
  */
 data class PressNode(val node: UiNode, val clickable: UiNode, val subtree: List<UiNode>, val pkg: String?)
 
-/** A text field found for typing in the active window [pkg] (never a password field). */
-data class FieldNode(val node: UiNode, val pkg: String?)
+/**
+ * A text field found for typing in the active window [pkg] (never a password field). [hasText]:
+ * it already holds text (not just its hint), which typing replaces; the text itself is never read.
+ */
+data class FieldNode(val node: UiNode, val pkg: String?, val hasText: Boolean = false)
 
 /** How a [PhoneHands] call ended. */
 enum class HandResult {
