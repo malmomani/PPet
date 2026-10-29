@@ -130,9 +130,12 @@ Builds on: `2026-10-25-maya-screen-design.md` (screen sense, body, moves).
 ### 5.4 Brain
 - `Thought.act: {kind, …} | null` (validated per §5.1; invalid → dropped, rest of thought kept).
 - Prompt lists the kinds briefly; says risky ones will be confirmed by the user.
-- Own-initiative acts (not in reply to a user message/tap): only when tier ∈ {friend, close}, not quiet
-  hours, not shushed, ≤ 10 per rolling hour (persisted), and never risky kinds (`press` on risky targets,
-  `type`). Acts in reply to the user: no rate limit (risk rules still apply on the phone).
+- Own-initiative acts (anything not in reply to a user **message**; taps and look replies count as own
+  initiative): only `open_app`, `media`, `timer`, `alarm`, `volume`, `scroll` — never `press`, `type` or
+  `web_search` — and only when tier ∈ {friend, close}, not quiet hours, not shushed, ≤ 10 per rolling hour
+  (persisted); paused after a `blocked "off"` until the next Hello or a `done`. Silent body thoughts never
+  act. Acts in reply to a user message: no rate limit (risk rules still apply on the phone).
+  *(Amended 2026-10-29 after the final review: she must not press buttons such as Like or Allow on her own.)*
 - `act_result` → memory turn: done `"you {summary}"`, declined `"the user said no to {summary}"`,
   timeout `"the user didn't answer when you asked to {summary}"`, failed/blocked `"you couldn't {summary} ({detail})"`.
   No urge change except declined (+0; she may sulk via normal thinking).
