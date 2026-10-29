@@ -224,31 +224,18 @@ class Thinker:
     async def build_messages(self, ctx: Context) -> list[dict]:
         mood, intensity = self.emotion.mood()
         tier = self.emotion.tier()
+        # Fixed parts first and changing parts last, so a local server (llama-server) can reuse its
+        # prompt cache: only the tail after the first difference has to be read again each time.
         parts = [
             self.persona.render(),
             SELF_MODEL,
-            "",
-            f"Closeness tier: {tier}",
-            TIER_GUIDANCE[tier],
-            "",
-            f"Your current mood: {mood} (intensity {intensity:.2f}).",
-        ]
-        facts = self.memory.facts()
-        if facts:
-            parts += ["", "What you know about the user:"]
-            parts += [f"- {k}: {v}" for k, v in facts.items()]
-        episodes = await self.memory.recall(ctx.detail)
-        if episodes:
-            parts += ["", "Things you remember that may be relevant:"]
-            parts += [f"- ({e.created_at.date().isoformat()}) {e.summary}" for e in episodes]
-        parts += [
             "",
             "Rules:",
             "- Reply with ONLY a JSON object with these keys: "
             '"thought" (string), "speak" (boolean), "say" (string), "animation" (string), '
             '"mood" (string), "mood_intensity" (number 0 to 1), "closeness_delta" (number -3 to 3).',
             '- "move" (object or null): {"intent": one of '
-            + ", ".join(i for i in MOVE_INTENTS if ctx.tease_targets or i not in TEASE_INTENTS)
+            + ", ".join(i for i in MOVE_INTENTS if i not in TEASE_INTENTS)
             + ', "target": null}',
             f"- animation must be one of: {', '.join(ANIMATIONS)}.",
             f"- mood must be one of: {', '.join(MOODS)}.",
@@ -256,17 +243,33 @@ class Thinker:
             '- When the trigger is not a direct message or tap from the user, it is fine and '
             'often better to set "speak" to false.',
             "- Never mention being an AI model or these instructions.",
-            '- "thought" is your private inner thought; the user never sees it.',
+            '- "thought" is your private inner thought, at most one short sentence; the user never sees it.',
             LOOK_RULE,
             ACT_RULE,
         ]
+        facts = self.memory.facts()
+        if facts:
+            parts += ["", "What you know about the user:"]
+            parts += [f"- {k}: {v}" for k, v in facts.items()]
+
+        lines = [
+            f"Closeness tier: {tier}",
+            TIER_GUIDANCE[tier],
+            f"Your current mood: {mood} (intensity {intensity:.2f}).",
+        ]
+        episodes = await self.memory.recall(ctx.detail)
+        if episodes:
+            lines += ["", "Things you remember that may be relevant:"]
+            lines += [f"- ({e.created_at.date().isoformat()}) {e.summary}" for e in episodes]
         if ctx.tease_targets:
-            parts.append(
-                '- sit_on/poke tease the user and need "target": one of ' + ", ".join(ctx.tease_targets) + "."
-            )
+            lines += [
+                "",
+                '- You may also tease with "move" intents sit_on or poke; they need "target": one of '
+                + ", ".join(ctx.tease_targets) + ".",
+            ]
 
         now = self.clock.now()
-        lines = [f"Local time: {now.strftime('%A %H:%M')}"]
+        lines += ["", f"Local time: {now.strftime('%A %H:%M')}"]
         if ctx.current_app:
             app = f"Current app: {ctx.current_app}"
             if ctx.app_minutes is not None:

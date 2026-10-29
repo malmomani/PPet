@@ -8,7 +8,7 @@ from maya_brain.initiative import Initiative
 from maya_brain.protocol import BodyEvent, GlanceEvent, Move, Screen, UserMessage, UserShush, UserTap
 from maya_brain.thinker import SELF_MODEL, Context, Thought, describe_body
 
-TEASE_LINE = '- sit_on/poke tease the user and need "target": one of send, like.'
+TEASE_LINE = '- You may also tease with "move" intents sit_on or poke; they need "target": one of send, like.'
 
 
 def glance(app="WhatsApp", lines=("hello there, how are you",), targets=("send", "like")):
@@ -39,7 +39,8 @@ def last_user_prompt(mind):
 
 
 def last_system_prompt(mind):
-    return mind.thinker.llm.calls[-1][0]["content"]
+    # The whole prompt: fixed rules in the system message, changing context (tease line) in the user one.
+    return "\n".join(m["content"] for m in mind.thinker.llm.calls[-1][:2])
 
 
 # ---- thinker ----
@@ -119,13 +120,18 @@ async def test_screen_lines_char_cap(thinker):
 
 
 async def test_move_rules_in_prompt(thinker):
-    plain = (await thinker.build_messages(Context("initiative", "d")))[0]["content"]
+    def whole(msgs):
+        return "\n".join(m["content"] for m in msgs)
+
+    plain_msgs = await thinker.build_messages(Context("initiative", "d"))
     base = '"move" (object or null): {"intent": one of stay, wander, come_closer, go_left, go_right, go_up, go_down, sit, nap, peek'
-    assert base + ', "target": null}' in plain
+    assert base + ', "target": null}' in plain_msgs[0]["content"]
+    plain = whole(plain_msgs)
     assert "sit_on" not in plain and "tease" not in plain.lower().replace("teasing grows", "")
-    teasing = (await thinker.build_messages(Context("initiative", "d", tease_targets=("send", "like"))))[0]["content"]
-    assert base + ', sit_on, poke, "target": null}' in teasing
-    assert TEASE_LINE in teasing
+    teasing_msgs = await thinker.build_messages(Context("initiative", "d", tease_targets=("send", "like")))
+    # the fixed system message is identical (cacheable); the tease option lives in the user message
+    assert teasing_msgs[0]["content"] == plain_msgs[0]["content"]
+    assert TEASE_LINE in teasing_msgs[1]["content"]
 
 
 def test_thought_move_validator():

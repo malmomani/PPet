@@ -11,8 +11,20 @@ async def test_prompt_contains_context(thinker, memory):
         Context("initiative", "User has been on TikTok for 50 minutes", "TikTok", 50)
     )
     sys, usr = msgs[0]["content"], msgs[1]["content"]
-    assert "Maya" in sys and "Sam" in sys and "stranger" in sys.lower() and "peek" in sys
+    assert "Maya" in sys and "Sam" in sys and "peek" in sys
+    assert "stranger" in usr.lower() and "mood" in usr
     assert "I love ramen" in usr and "TikTok" in usr and "50 minutes" in usr
+
+
+async def test_system_prompt_is_stable_for_caching(thinker, memory):
+    """The system message must not change with mood, time, memories or context, so a local
+    server can reuse its prompt cache; only the user message carries what changes."""
+    first = (await thinker.build_messages(Context("initiative", "one", "TikTok", 5)))[0]["content"]
+    thinker.emotion.set_mood("excited", 0.9)
+    memory.add_turn("user", "something new")
+    second = (await thinker.build_messages(Context("user_message", "two", "YouTube", 1)))[0]["content"]
+    assert first == second
+    assert "at most one short sentence" in first
 
 
 async def test_valid_thought_stored(thinker, db):
