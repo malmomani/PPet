@@ -271,11 +271,11 @@ class BehaviorCommandTest {
     @Test fun a_move_waits_for_the_gesture_of_the_same_thought() {
         for (seed in 0 until 10) {
             val b = mk(seed)
-            b.play("happy"); b.command("stay", null)
+            b.play("sulk"); b.command("stay", null)
             val x0 = b.x
             repeat(ONE_SHOT_MS / 10 - 1) { // the whole gesture shows
                 b.tick(10)
-                assertEquals("happy", b.animation); assertEquals(x0, b.x)
+                assertEquals("sulk", b.animation); assertEquals(x0, b.x)
             }
             b.tick(10); b.tick(10)
             assertEquals("idle", b.animation)
@@ -287,7 +287,7 @@ class BehaviorCommandTest {
 
         val c = mk(speed = 200f) // on the floor at the right side
         c.play("wave"); c.command("go_right", null); c.command("go_left", null) // the latest wins
-        c.tick(ONE_SHOT_MS.toLong() - 10); assertEquals("wave", c.animation); assertEquals(950f, c.state.feetX)
+        c.tick(1500 - 10); assertEquals("wave", c.animation); assertEquals(950f, c.state.feetX)
         c.tick(10); c.tick(100)
         assertEquals("walk", c.animation); assertTrue(c.facingLeft); assertTrue(c.state.feetX < 950f)
 

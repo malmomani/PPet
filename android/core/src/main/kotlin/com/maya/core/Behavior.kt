@@ -15,9 +15,11 @@ const val SIT_MIN_MS = 5000
 const val SIT_MAX_MS = 15000
 const val ONE_SHOT_MS = 2500
 
-/** Share of the decisions left after jump/peek/drop that walk / sit; the rest (35 %) stays idle. */
+/** Share of the decisions left after jump/peek/drop that walk / sit / fidget; the rest (20 %) stays idle. */
 const val WALK_CHANCE_PCT = 40
 const val SIT_CHANCE_PCT = 25
+/** A fidget: a little gesture that fits her mood (look around, a happy hop, a wave, a sulk, a doze, typing along). */
+const val FIDGET_CHANCE_PCT = 15
 const val PEEK_CHANCE_PCT = 5
 const val DROP_CHANCE_PCT = 5
 
@@ -47,8 +49,19 @@ const val MOVE_MAX_MS = 15_000
 /** Sustained poses the app holds while something is going on (her voice, listening, thinking). */
 val BODY_POSES = listOf("talk", "listen", "think")
 
-/** Animations that `play` shows for [ONE_SHOT_MS] and then return to idle. */
-private val ONE_SHOTS = setOf("wave", "peek", "happy", "sulk", "surprised")
+/**
+ * Animations that `play` shows for a moment and then return to idle, and how long (ms): a whole
+ * number of plays of the looping ones (a wave waves twice), so none freezes on its last frame.
+ */
+private val ONE_SHOTS = mapOf(
+    "wave" to 1500L,
+    "peek" to ONE_SHOT_MS.toLong(),
+    "happy" to 1000L,
+    "sulk" to ONE_SHOT_MS.toLong(),
+    "surprised" to 1200L,
+    "look" to 2000L,
+    "type" to 2000L,
+)
 
 /** Something that happened to her body, for the brain: [kind] `fell` or `shooed`; [target] the tease tag involved. */
 data class Moment(val kind: String, val target: String?)
@@ -147,6 +160,7 @@ class Behavior(
     private var restricted = false
     private var mood = ""
     private var tier = "stranger"
+    private var userTyping = false
 
     private var dest: Float? = null
     private var then = Then.NONE
@@ -309,7 +323,30 @@ class Behavior(
      * Plays [name]. A one-shot asked for in the air plays on landing (the latest one wins); one
      * during a move pauses it (the move carries on afterwards). Ignored while she teases.
      */
-    fun play(name: String) = playFor(name, ONE_SHOT_MS.toLong())
+    fun play(name: String) = playFor(name, ONE_SHOTS[name] ?: ONE_SHOT_MS.toLong())
+
+    /**
+     * A small reaction of her own to something the user did (an app opened, a notification, the
+     * keyboard): the one-shot [name] plays, facing the middle of the screen, but only while she is
+     * free (roaming by herself: no move, tease, press, gesture or pose under way, not napping).
+     * Returns whether she reacted.
+     */
+    fun react(name: String): Boolean {
+        val ms = ONE_SHOTS[name] ?: return false
+        if (!connected || dragging || airborne || pose != null || !free()) return false
+        facingLeft = feetX > screenW / 2f
+        startOneShot(name, ms)
+        return true
+    }
+
+    /** Roaming by herself: nothing asked of her is under way. */
+    private fun free(): Boolean = goal == null && tease == null && deferred.isEmpty() && !pressPending &&
+        then == Then.NONE && (mode == Mode.IDLE || mode == Mode.WALK || mode == Mode.SIT)
+
+    /** The user is typing (keyboard open): some of her fidgets type along. */
+    fun setUserTyping(on: Boolean) {
+        userTyping = on
+    }
 
     private fun playFor(name: String, ms: Long) {
         if (!connected || dragging) return
@@ -373,7 +410,7 @@ class Behavior(
         if (press != null) return startPress(press)
         when (intent) {
             "stay" -> { goIdle(); remainingMs = STAY_MS.toLong() }
-            "wander" -> decide()
+            "wander" -> act(pickAction().let { if (it == "fidget") "walk" else it }) // she was asked to move
             "come_closer" -> comeCloser()
             "go_left" -> goSide(-1)
             "go_right" -> goSide(1)
@@ -511,12 +548,13 @@ class Behavior(
         return true
     }
 
-    /** One idle decision roll: walk, jump, sit, peek, drop or idle. */
+    /** One idle decision roll: walk, jump, sit, peek, drop, fidget or idle. */
     internal fun pickAction(): String {
         val jump = jumpChancePct()
         val rest = 100 - jump - PEEK_CHANCE_PCT - DROP_CHANCE_PCT
         val walk = rest * WALK_CHANCE_PCT / 100
         val sit = rest * SIT_CHANCE_PCT / 100
+        val fidget = rest * FIDGET_CHANCE_PCT / 100
         val roll = rng.nextInt(100)
         var edge = jump
         if (roll < edge) return "jump"
@@ -528,7 +566,23 @@ class Behavior(
         if (roll < edge) return "walk"
         edge += sit
         if (roll < edge) return "sit"
+        edge += fidget
+        if (roll < edge) return "fidget"
         return "idle"
+    }
+
+    /** The fidget that fits her mood now (a one-shot name, or `nap`). */
+    internal fun pickFidget(): String {
+        if (userTyping && rng.nextInt(100) < 60) return "type"
+        val options = when (mood) {
+            "sleepy" -> listOf("nap", "nap", "look")
+            "sulky" -> listOf("sulk", "sulk", "look")
+            "worried" -> listOf("look", "look", "surprised")
+            "bored" -> listOf("look", "look", "sulk", "nap")
+            "happy", "excited" -> listOf("happy", "happy", "wave", "look")
+            else -> listOf("look", "look", "happy", "wave") // curious, or not told yet
+        }
+        return options[rng.nextInt(options.size)]
     }
 
     /** Carries out a decision; a jump with nothing reachable, or a drop from the floor, is a walk. */
@@ -542,6 +596,11 @@ class Behavior(
             "sit" -> startSit()
             "peek" -> startPeek()
             "drop" -> if (!startDrop()) startWalk()
+            "fidget" -> when (val f = pickFidget()) {
+                "nap" -> startNap(rangeMs(SIT_MIN_MS, SIT_MAX_MS))
+                "look", "wave" -> react(f)
+                else -> startOneShot(f, ONE_SHOTS.getValue(f))
+            }
             else -> goIdle()
         }
     }

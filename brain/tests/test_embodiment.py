@@ -203,12 +203,12 @@ async def test_invalid_moves_dropped(mind, sent):
     await mind.handle(UserMessage(text="tease me"))
     assert [(m.intent, m.target) for m in moves(sent)] == [("sit_on", "send")]
     sent.clear()
-    mind.clock.advance(timedelta(seconds=599))
+    mind.clock.advance(timedelta(seconds=239))
     await mind.handle(glance())
     script(mind, reply({"intent": "poke", "target": "like"}))
     await mind.handle(UserMessage(text="again"))
     assert moves(sent) == [] and any(a.type == "say" for a in sent)
-    # the cooldown ends at 600 s
+    # the cooldown ends at 240 s
     sent.clear()
     mind.clock.advance(timedelta(seconds=1))
     await mind.handle(glance())
@@ -257,9 +257,6 @@ async def test_tease_guardrails(mind, sent, clock):
         assert moves(sent) == [], name
         assert any(a.type == "say" for a in sent), name
 
-    async def stranger():
-        await prime(mind, tier="stranger")
-
     async def sulky():
         await prime(mind, mood="sulky")
 
@@ -286,7 +283,7 @@ async def test_tease_guardrails(mind, sent, clock):
         await prime(mind)
         await mind.handle(Screen(on=False))
 
-    for setup, name in [(stranger, "stranger"), (sulky, "sulky"), (no_glance, "no glance"), (stale, "stale"),
+    for setup, name in [(sulky, "sulky"), (no_glance, "no glance"), (stale, "stale"),
                         (no_targets, "no targets"), (shushed, "shushed"), (disconnected, "disconnected"),
                         (screen_off, "screen off")]:  # fmt: skip
         await check(setup, name)
@@ -311,7 +308,7 @@ def test_tease_cooldown_persisted(ini, clock, db):
     assert not ini.tease_ready()
     reopened = Initiative(InitiativeConfig(), db, clock)
     assert not reopened.tease_ready()
-    clock.advance(timedelta(seconds=599))
+    clock.advance(timedelta(seconds=239))
     assert not reopened.tease_ready()
     clock.advance(timedelta(seconds=1))
     assert reopened.tease_ready()
@@ -359,7 +356,7 @@ async def test_body_thought_timer(mind, sent, clock):
 
     await mind.tick()  # first tick only schedules
     assert llm.calls == [] and mind._next_body_at == clock.now() + timedelta(seconds=200)
-    assert drawn == [(120, 240)]
+    assert drawn == [(60, 120)]
 
     clock.advance(timedelta(seconds=199))
     await mind.tick()
@@ -388,8 +385,8 @@ async def test_body_thought_urge_unchanged(mind, clock):
     clock.advance(timedelta(seconds=1))
     await mind.tick()
     assert len(mind.thinker.llm.calls) == 1
-    # the tick adds only its own 0.5 (stranger x curious); the thought neither resets nor bumps it
-    assert mind.initiative.urge == pytest.approx(before + 0.5)
+    # the tick adds only its own 3 (stranger x curious x user around); the thought neither resets nor bumps it
+    assert mind.initiative.urge == pytest.approx(before + 3)
     assert mind.initiative.last_reason == reason
 
 

@@ -386,7 +386,44 @@ class BehaviorTest {
         val b = mk(seed = 3)
         b.setTemper("happy", "friend")
         val seen = (1..1000).map { b.pickAction() }.toSet()
-        assertEquals(setOf("walk", "jump", "sit", "peek", "drop", "idle"), seen)
+        assertEquals(setOf("walk", "jump", "sit", "peek", "drop", "fidget", "idle"), seen)
+    }
+
+    @Test fun fidgets_fit_her_mood() {
+        fun fidgets(mood: String, typing: Boolean = false): Set<String> {
+            val b = mk(seed = 5)
+            b.setTemper(mood, "friend")
+            b.setUserTyping(typing)
+            return (1..200).map { b.pickFidget() }.toSet()
+        }
+        assertEquals(setOf("nap", "look"), fidgets("sleepy"))
+        assertEquals(setOf("sulk", "look"), fidgets("sulky"))
+        assertEquals(setOf("happy", "wave", "look"), fidgets("excited"))
+        assertEquals(setOf("look", "happy", "wave"), fidgets("curious"))
+        assertTrue("type" in fidgets("curious", typing = true))
+        assertFalse("type" in fidgets("curious"))
+    }
+
+    @Test fun a_fidget_plays_and_ends_in_idle() {
+        val b = mk(seed = 5)
+        b.setTemper("sulky", "friend")
+        b.act("fidget")
+        assertTrue(b.animation in setOf("sulk", "look"))
+        b.tick(ONE_SHOT_MS.toLong()); assertEquals("idle", b.animation)
+    }
+
+    @Test fun react_plays_facing_the_middle_only_while_she_is_free() {
+        val b = mk()
+        assertTrue(b.react("look")); assertEquals("look", b.animation); assertTrue(b.facingLeft) // she stands on the right
+        b.tick(2000); assertEquals("idle", b.animation)
+        assertFalse(b.react("fly")) // not a gesture
+        b.command("go_left", null) // a move under way: no reaction
+        assertFalse(b.react("surprised")); assertEquals("walk", b.animation)
+        b.command("stay", null)
+        b.setPose("talk"); assertFalse(b.react("wave")); b.setPose(null)
+        b.setConnected(false); assertFalse(b.react("wave")); b.setConnected(true)
+        assertTrue(b.react("wave"))
+        assertFalse(b.react("look")) // a gesture already plays
     }
 
     @Test fun decisions_never_start_before_three_seconds() {
@@ -544,7 +581,13 @@ class BehaviorTest {
 
     @Test fun play_returns_to_idle_after_2500ms() {
         val b = mk()
-        b.play("wave"); b.tick(2400); assertEquals("wave", b.animation); b.tick(200); assertEquals("idle", b.animation)
+        b.play("sulk"); b.tick(2400); assertEquals("sulk", b.animation); b.tick(200); assertEquals("idle", b.animation)
+    }
+
+    @Test fun gestures_last_whole_plays() {
+        val b = mk()
+        b.play("wave"); b.tick(1400); assertEquals("wave", b.animation); b.tick(200); assertEquals("idle", b.animation)
+        b.play("happy"); b.tick(900); assertEquals("happy", b.animation); b.tick(200); assertEquals("idle", b.animation)
     }
 
     @Test fun play_is_ignored_in_the_air() {

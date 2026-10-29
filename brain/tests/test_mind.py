@@ -81,11 +81,19 @@ async def test_initiative_fires_from_tick(mind, sent):
     assert any(a.type == "say" for a in sent) and mind.initiative.urge == 0
 
 
-async def test_initiative_can_choose_silence(mind, sent):
+async def test_initiative_with_nothing_to_say_or_do_is_dropped(mind, sent):
     mind.thinker.llm.replies = ['{"speak": false, "animation": "peek"}']
     mind.initiative._set_urge(60)
     await mind.tick()
-    assert [a.type for a in sent] == ["animate"]
+    assert sent == [] and len(mind.thinker.llm.calls) == 2  # retried once, then nothing
+    assert mind.initiative.urge == 0  # still counts as fired
+
+
+async def test_initiative_speaks(mind, sent):
+    mind.thinker.llm.replies = ['{"speak": false, "say": "hey, still on TikTok?"}']
+    mind.initiative._set_urge(60)
+    await mind.tick()
+    assert [a.text for a in sent if a.type == "say"] == ["hey, still on TikTok?"]
 
 
 async def test_shush_blocks_initiative(mind, sent):
@@ -223,11 +231,11 @@ async def test_no_unprompted_remark_right_after_reply(mind, sent, clock):
     await mind.handle(UserMessage(text="hi"))
     assert mind.initiative.urge == 0
     mind.initiative._set_urge(100)
-    clock.advance(timedelta(minutes=5))
+    clock.advance(timedelta(minutes=4))
     sent.clear()
     await mind.tick()
     assert not any(a.type == "say" for a in sent)
-    clock.advance(timedelta(minutes=5))
+    clock.advance(timedelta(minutes=1))
     await mind.tick()
     assert any(a.type == "say" for a in sent)
 
@@ -303,3 +311,55 @@ async def test_summarize_failure_backs_off_30_min(mind, clock):
     clock.advance(timedelta(minutes=1))
     await mind.tick()
     assert mind.memory.unsummarized_turns() == []
+
+
+# ---- liveliness and quick replies ----
+
+
+async def test_message_waiting_on_her_thought_gets_dots_at_once(mind, sent):
+    gate = asyncio.Event()
+    real_chat = mind.thinker.llm.chat
+
+    async def slow_chat(messages, json_mode=False):
+        await gate.wait()
+        return await real_chat(messages, json_mode)
+
+    mind.thinker.llm.chat = slow_chat
+    mind.initiative._set_urge(100)
+    busy = asyncio.create_task(mind.tick())  # her own thought holds the lock
+    await asyncio.sleep(0)
+    reply = asyncio.create_task(mind.handle(UserMessage(text="hi")))
+    await asyncio.sleep(0)
+    assert [(a.type, a.on) for a in sent] == [("typing", True)]  # before her thought ends
+    gate.set()
+    await asyncio.gather(busy, reply)
+
+
+async def test_waiting_reply_goes_before_her_own_thoughts(mind, sent):
+    mind.initiative._set_urge(100)
+    mind._replies_waiting = 1
+    await mind.tick()
+    assert mind.thinker.llm.calls == []
+    mind._replies_waiting = 0
+    await mind.tick()
+    assert len(mind.thinker.llm.calls) == 1
+
+
+async def test_rewarm_when_the_user_is_back(mind, clock):
+    warmed = []
+
+    async def warm_up():
+        warmed.append(clock.now())
+
+    mind.thinker.llm.warm_up = warm_up
+    await mind.handle(Screen(on=True))
+    await asyncio.sleep(0)
+    assert len(warmed) == 1
+    await mind.handle(Screen(on=True))  # just warmed: no second load
+    await mind.handle(Screen(on=False))
+    await asyncio.sleep(0)
+    assert len(warmed) == 1
+    clock.advance(timedelta(minutes=21))
+    await mind.handle(Hello(client_version="1", screen_w=1, screen_h=1))
+    await asyncio.sleep(0)
+    assert len(warmed) == 2

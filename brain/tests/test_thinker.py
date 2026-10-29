@@ -50,7 +50,7 @@ def test_thought_normalizes_bad_fields():
 
 async def test_retry_once_then_success(thinker_with):
     th, llm = thinker_with(["garbage", '{"speak": false}'])
-    t = await th.think(Context("initiative", "bored"))
+    t = await th.think(Context("event", "bored"))
     assert t is not None and t.speak is False and len(llm.calls) == 2
     assert llm.calls[1][-2]["role"] == "assistant" and llm.calls[1][-2]["content"] == "garbage"
 
@@ -80,3 +80,9 @@ async def test_two_bad_replies_logged_truncated(thinker_with, caplog):
         assert await th.think(Context("initiative", "bored")) is None
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert "garbage" in text and "x" * 500 in text and "x" * 501 not in text
+
+
+async def test_initiative_keeps_a_wordless_move(thinker_with):
+    th, llm = thinker_with(['{"speak": false, "move": {"intent": "peek"}}'])
+    t = await th.think(Context("initiative", "bored"))
+    assert t is not None and t.speak is False and t.move.intent == "peek" and len(llm.calls) == 1

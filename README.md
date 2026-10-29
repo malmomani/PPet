@@ -168,6 +168,7 @@ Tap **Start Maya**. She appears on screen. The notification says **"Maya is here
 - **Hold** her to talk out loud; let go to send.
 - **Drag** or **throw** her around.
 - She wanders over buttons, comments on what you're doing and who messages you, and sometimes teases you by sitting on your Send button. Tap her to shoo her off.
+- She reacts by herself too: she glances at apps you open, startles at notifications, types along when your keyboard is up, and waves when you come back.
 - The notification has **Shh** (quiet for an hour) and **Hide**.
 - You can turn each sense off in her settings, and add apps she must never watch (banking apps, for example) to the **do-not-watch** list.
 

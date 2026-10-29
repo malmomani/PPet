@@ -28,6 +28,7 @@ DIRECT_TRIGGERS = {USER_MESSAGE_TRIGGER, "user_tap"}
 LOOK_TRIGGER = "look"  # the answer to a look the user asked for: a reply, like a message
 ACT_RESULT_TRIGGER = "act_result"  # something the user asked her to do on the phone didn't happen: she says so
 REPLY_TRIGGERS = DIRECT_TRIGGERS | {LOOK_TRIGGER, ACT_RESULT_TRIGGER}  # she must say something
+INITIATIVE_TRIGGER = "initiative"  # her urge to talk boiled over: she says something too
 LOG_REPLY_CHARS = 500
 
 MAX_SAY = 300
@@ -240,8 +241,8 @@ class Thinker:
             f"- animation must be one of: {', '.join(ANIMATIONS)}.",
             f"- mood must be one of: {', '.join(MOODS)}.",
             '- "say" is 1-2 short, casual sentences, spoken to the user.',
-            '- When the trigger is not a direct message or tap from the user, it is fine and '
-            'often better to set "speak" to false.',
+            '- On "initiative" you felt like saying something yourself: speak, about what is going on '
+            "(the app, the screen, the time, your body, the user). On other events speaking is optional.",
             "- Never mention being an AI model or these instructions.",
             '- "thought" is your private inner thought, at most one short sentence; the user never sees it.',
             LOOK_RULE,
@@ -294,12 +295,17 @@ class Thinker:
             {"role": "user", "content": "\n".join(lines)},
         ]
 
-    def _parse(self, reply: str, direct: bool, silent: bool = False) -> Thought | None:
+    def _parse(self, reply: str, direct: bool, silent: bool = False, initiative: bool = False) -> Thought | None:
         try:
             thought = Thought.model_validate(extract_json(reply))
         except (ValueError, ValidationError):
             return None
-        if direct:
+        if initiative:
+            # She wanted to do something: words, or at least a move or an act. Nothing at all is no thought.
+            if not thought.say and thought.move is None and thought.act is None:
+                return None
+            thought.speak = bool(thought.say)
+        elif direct:
             if not thought.say:
                 return None
             thought.speak = True
@@ -310,9 +316,10 @@ class Thinker:
     async def think(self, ctx: Context) -> Thought | None:
         direct = ctx.trigger in REPLY_TRIGGERS
         silent = ctx.trigger == "body"
+        initiative = ctx.trigger == INITIATIVE_TRIGGER
         messages = await self.build_messages(ctx)
         reply = await self.llm.chat(messages, json_mode=True)
-        thought = self._parse(reply, direct, silent)
+        thought = self._parse(reply, direct, silent, initiative)
         if thought is None:
             first = reply
             messages = messages + [
@@ -320,7 +327,7 @@ class Thinker:
                 {"role": "user", "content": RETRY_MESSAGE},
             ]
             reply = await self.llm.chat(messages, json_mode=True)
-            thought = self._parse(reply, direct, silent)
+            thought = self._parse(reply, direct, silent, initiative)
             if thought is None:
                 log.warning(
                     "no usable thought for trigger %s after retry; replies: %r / %r",

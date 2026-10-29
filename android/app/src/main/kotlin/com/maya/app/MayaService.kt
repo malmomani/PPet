@@ -67,6 +67,9 @@ interface OverlayHook {
     /** Her spoken reply finished or was stopped. */
     fun onVoiceEnded()
 
+    /** An event on its way to the brain: she may react to it by herself first (a glance, a startle). */
+    fun noticed(e: Event) {}
+
     /**
      * What she can stand on and tease in the current app (Layout.EMPTY: only the floor), the
      * keyboard's top edge in screen pixels while one is open, and [restricted]: no teasing now
@@ -209,6 +212,7 @@ class MayaService : Service() {
         } else {
             e
         }
+        overlay?.noticed(out)
         connection?.send(out)
     }
 

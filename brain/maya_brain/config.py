@@ -43,8 +43,8 @@ class PersonaConfig:
 class InitiativeConfig:
     threshold: float = 60.0
     tick_s: float = 30.0
-    cooldown_min: int = 10
-    daily_cap: int = 15
+    cooldown_min: int = 5
+    daily_cap: int = 40
     quiet_start: str = "23:30"
     quiet_end: str = "08:00"
     late_night_max: int = 2

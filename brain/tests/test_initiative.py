@@ -41,7 +41,7 @@ def test_guardrails_cooldown_and_shush(ini, clock):
 
 
 def test_daily_cap_resets_next_day(ini, clock):
-    for _ in range(15): ini._set_urge(60); assert ini.should_fire(); ini.fired(True); clock.advance(timedelta(minutes=10))
+    for _ in range(40): ini._set_urge(60); assert ini.should_fire(); ini.fired(True); clock.advance(timedelta(minutes=5))
     ini._set_urge(60); assert not ini.should_fire()
     clock.set(clock.now().replace(hour=9) + timedelta(days=1)); ini._set_urge(60); assert ini.should_fire()
 
@@ -128,7 +128,7 @@ def test_no_base_gain_in_quiet_hours_unless_late_night_pending(ini, clock):
     assert ini.urge == 0
     ini.on_event(Screen(on=True))  # late-night use: +10 and pending
     ini.tick("friend", "curious")
-    assert ini.urge == pytest.approx(11)
+    assert ini.urge == pytest.approx(10 + 6)  # x6 while the user is around
 
 
 def test_engaged_resets_urge_and_cooldown_without_counting(ini, clock):
@@ -165,3 +165,18 @@ def test_hello_clears_current_app(ini):
     ini.on_event(AppOpened(package="t", label="TikTok"))
     ini.on_event(HELLO)
     assert ini.current_app() is None
+
+
+def test_urge_builds_faster_while_the_user_is_around(ini, clock):
+    from maya_brain.protocol import GlanceEvent
+
+    ini.on_event(UserTap())
+    ini.tick("friend", "curious")
+    assert ini.urge == pytest.approx(6)
+    clock.advance(timedelta(minutes=11))
+    ini.tick("friend", "curious")
+    assert ini.urge == pytest.approx(7)  # nobody around any more: the slow pace
+    ini.on_event(GlanceEvent(package="p", app="Reddit", lines=["a fairly long line of text"]))  # +4, and around
+    ini.tick("friend", "curious")
+    assert ini.urge == pytest.approx(7 + 4 + 6)
+    assert ini.body_allowed()  # scrolling counts as being around for her body thoughts too

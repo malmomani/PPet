@@ -9,7 +9,8 @@ import android.view.View
 /**
  * Draws the current sprite frame scaled to the view size with nearest-neighbour sampling (crisp
  * pixels), mirrored horizontally when [facingLeft] (the art faces right). [advance] steps frames
- * at the animation's fps; a non-looping animation holds its last frame.
+ * at the animation's fps; a non-looping animation holds its last frame, except the gestures in
+ * [REPEATED] (a wave, a happy hop), which play again for as long as she keeps them up.
  */
 class SpriteView(context: Context, private val sheet: SpriteSheet) : View(context) {
     private val paint = Paint().apply {
@@ -48,7 +49,7 @@ class SpriteView(context: Context, private val sheet: SpriteSheet) : View(contex
             if (frameIndex < spec.frames - 1) {
                 frameIndex++
                 changed = true
-            } else if (spec.loop) {
+            } else if (spec.loop || animation in REPEATED) {
                 if (frameIndex != 0) {
                     frameIndex = 0
                     changed = true
@@ -71,5 +72,10 @@ class SpriteView(context: Context, private val sheet: SpriteSheet) : View(contex
         if (facingLeft) canvas.scale(-1f, 1f, w / 2f, h / 2f)
         canvas.drawBitmap(sheet.bitmap, sheet.frame(animation, frameIndex), dst, paint)
         canvas.restoreToCount(saved)
+    }
+
+    private companion object {
+        /** Gestures Behavior holds for a whole number of plays: they repeat instead of freezing. */
+        val REPEATED = setOf("wave", "happy")
     }
 }

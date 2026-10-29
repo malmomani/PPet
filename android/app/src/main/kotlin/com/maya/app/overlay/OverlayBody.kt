@@ -28,6 +28,7 @@ import com.maya.app.voice.VoiceInput
 import com.maya.core.Act
 import com.maya.core.Action
 import com.maya.core.Animate
+import com.maya.core.AppOpened
 import com.maya.core.Audio
 import com.maya.core.Behavior
 import com.maya.core.Body
@@ -42,6 +43,7 @@ import com.maya.core.HOLD_TO_TALK_MS
 import com.maya.core.Layout
 import com.maya.core.Look
 import com.maya.core.Move
+import com.maya.core.Notification
 import com.maya.core.Say
 import com.maya.core.State
 import com.maya.core.Typing
@@ -101,6 +103,7 @@ class OverlayBody(
     private var restricted = false
     private var mood: String? = null
     private var tier: String? = null
+    private var userTyping = false
 
     private val spriteView = SpriteView(ctx, sheet)
     private val params = overlayParams(
@@ -116,6 +119,8 @@ class OverlayBody(
     private var destroyed = false
     private var looping = false
     private var screenOn = true
+    /** When the screen went off (uptime), to greet the user when they are back after a while. */
+    private var screenOffAtMs = 0L
     private var lastFrameNs = 0L
     private var sizeCheckMs = 0L
 
@@ -142,6 +147,12 @@ class OverlayBody(
     private val endLook = Runnable {
         looking = false
         updatePose()
+    }
+    /** A message she heard never got an answer started (the brain's typing state didn't come). */
+    private val endThinking = Runnable {
+        thinking = false
+        updatePose()
+        if (bubbleHeld()) deferredTyping = false else if (visible) bubble.typing(false)
     }
     private val holdRunnable = Runnable { onHoldTimer() }
     private val listenCap = Runnable { if (listening) voice.stop() }
@@ -201,6 +212,7 @@ class OverlayBody(
             is Animate -> behavior.play(a.name)
             // While listening the bubble shows what she hears; replies come after it.
             is Say -> {
+                main.removeCallbacks(endThinking)
                 thinking = false
                 stopLooking()
                 updatePose()
@@ -212,6 +224,7 @@ class OverlayBody(
                 }
             }
             is Typing -> {
+                main.removeCallbacks(endThinking)
                 thinking = a.on
                 if (!a.on) stopLooking()
                 updatePose()
@@ -244,6 +257,28 @@ class OverlayBody(
     }
 
     /**
+     * What the user just did, as she notices it herself before the brain thinks about it: she
+     * looks at an app that opens, startles at a notification, and starts thinking (dots, `think`)
+     * the moment a message is sent; the brain's typing state takes over when it comes.
+     */
+    override fun noticed(e: Event) {
+        if (!visible || !connected) return
+        when (e) {
+            is AppOpened -> behavior.react("look")
+            is Notification -> behavior.react("surprised")
+            is UserMessage -> {
+                thinking = true
+                updatePose()
+                main.removeCallbacks(endThinking)
+                main.postDelayed(endThinking, HEARD_THINK_MS)
+                // a spoken one: the bubble shows what she heard first, the dots come after it
+                if (bubbleHeld() || e.voice) deferredTyping = true else bubble.typing(true)
+            }
+            else -> Unit
+        }
+    }
+
+    /**
      * The current app's platforms and tease targets. An open keyboard does not move her floor: she
      * keeps resting behind it, out of the way of the compose bar and Send (restricted keeps her off
      * the buttons above it). Restriction goes first, so platforms that vanish because she may not
@@ -256,6 +291,12 @@ class OverlayBody(
         behavior.setFloor(floorY())
         behavior.setRestricted(restricted)
         behavior.setLayout(layout, quiet)
+        val typing = keyboardTop != null
+        if (typing != userTyping) {
+            userTyping = typing
+            behavior.setUserTyping(typing)
+            if (typing) behavior.react("type") // she types along
+        }
     }
 
     /**
@@ -301,6 +342,7 @@ class OverlayBody(
         behavior.setConnected(on)
         if (on) reporter.reset() // the brain hears where she is right away
         if (!on) {
+            main.removeCallbacks(endThinking)
             thinking = false
             stopLooking()
             updatePose()
@@ -314,9 +356,13 @@ class OverlayBody(
     override fun setScreenOn(on: Boolean) {
         if (on == screenOn) return
         screenOn = on
+        val now = SystemClock.uptimeMillis()
         if (on) {
             if (visible) startLoop()
+            // back after a while: she waves hello
+            if (screenOffAtMs != 0L && now - screenOffAtMs >= WAVE_AFTER_OFF_MS) behavior.react("wave")
         } else {
+            screenOffAtMs = now
             stopLoop()
             cancelListening()
             dropActions()
@@ -472,6 +518,7 @@ class OverlayBody(
     fun destroy() {
         hide()
         stopLooking()
+        main.removeCallbacks(endThinking)
         main.removeCallbacks(releaseBubble)
         main.removeCallbacks(endPoke)
         deferredSay = null
@@ -891,6 +938,7 @@ class OverlayBody(
         val m = mood
         val t = tier
         if (m != null && t != null) b.setTemper(m, t)
+        b.setUserTyping(userTyping)
         b.setConnected(connected)
         return b
     }
@@ -939,6 +987,10 @@ class OverlayBody(
         const val THROW_MS = 350L
         /** After she sent a screenshot she holds the `look` pose until her answer comes, at most this long. */
         const val LOOK_POSE_MS = 15_000L
+        /** After a message is sent she shows she's thinking until the brain answers, at most this long. */
+        const val HEARD_THINK_MS = 60_000L
+        /** The screen was off at least this long: she waves when it comes back on. */
+        const val WAVE_AFTER_OFF_MS = 60_000L
         const val THROW_SECONDS = 0.25f
         const val UNREACHABLE_BUBBLE_MS = 3000L
         const val TOGGLE_WINDOW_MS = 500L

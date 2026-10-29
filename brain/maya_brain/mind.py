@@ -74,9 +74,9 @@ SUMMARIZE_RETRY = timedelta(minutes=30)  # back-off after a failed summary
 REFLECT_IDLE = timedelta(minutes=10)  # reflection holds the lock for several LLM calls: not while the user is around
 MIN_APP_USE_S = 120
 SCREEN_FRESH = timedelta(minutes=10)  # how long a glance counts as "on screen now"
-TEASE_TIERS = {"friend", "close"}
-TEASE_MOODS = {"happy", "curious", "excited"}
-BODY_THOUGHT_EVERY_S = (120, 240)
+TEASE_TIERS = {"stranger", "friend", "close"}
+TEASE_MOODS = {"happy", "curious", "excited", "bored"}
+BODY_THOUGHT_EVERY_S = (60, 120)
 BODY_CHAT_QUIET = timedelta(seconds=60)  # no silent body thought this soon after the user talked to or tapped her
 ACT_TIERS = {"friend", "close"}  # tiers that may do things on the phone by themselves
 # The only kinds she may do on her own: never press, type or web_search (those only when the user asks in a message).
@@ -86,6 +86,7 @@ SIGHT_LINE_MAX = 160
 SUMMARY_PART_MAX = 40
 PENDING_ACTS_MAX = 20  # acts still waiting for their act_result
 COULDNT_SEE = "You tried to look at the screen but couldn't see it."
+REWARM_AFTER = timedelta(minutes=20)  # the user is back after this long without a thought: load the model again
 
 
 def bubble_ms(text: str) -> int:
@@ -255,6 +256,10 @@ class Mind:
         self.body: BodyEvent | None = None  # where her body is now (RAM only)
         self._rng = random.Random()
         self._next_body_at: datetime | None = None  # when the next silent body thought is due
+        self._replies_waiting = 0  # messages and taps waiting for the lock: her own thoughts let them go first
+        self._last_think: datetime | None = None
+        self._warming: asyncio.Task | None = None
+        self.llm = llm
         self.memory = Memory(db, llm, clock)
         self.persona = Persona(db, cfg.persona, clock)
         self.emotion = Emotion(db, clock)
@@ -296,6 +301,38 @@ class Mind:
         if isinstance(event, SightEvent):
             await self.handle_sight(event)  # describes outside the lock
             return
+        if isinstance(event, (Hello, Screen)) and getattr(event, "on", True):
+            self._maybe_rewarm()
+        if isinstance(event, (UserMessage, UserTap)):
+            self._replies_waiting += 1
+            try:
+                if isinstance(event, UserMessage) and self._lock.locked():
+                    await self._emit(Typing(on=True))  # she heard it: dots now, not after her current thought
+                await self._handle(event)
+            finally:
+                self._replies_waiting -= 1
+            return
+        await self._handle(event)
+
+    def _maybe_rewarm(self) -> None:
+        """The user is back after a long quiet: load the model in the background so her first reply is quick."""
+        warm = getattr(self.llm, "warm_up", None)
+        now = self.clock.now()
+        if warm is None or (self._last_think is not None and now - self._last_think < REWARM_AFTER):
+            return
+        if self._warming is not None and not self._warming.done():
+            return
+        self._last_think = now  # one warm-up per return
+
+        async def run() -> None:
+            try:
+                await warm()
+            except Exception as e:
+                log.debug("warming the model failed: %s", e)
+
+        self._warming = asyncio.create_task(run())
+
+    async def _handle(self, event: Event) -> None:
         async with self._lock:
             if isinstance(event, USER_ACTIVITY):
                 self._last_event = self.clock.now()
@@ -527,6 +564,7 @@ class Mind:
         return package is None or package == self.sight.package
 
     async def _think(self, ctx: Context) -> Thought | None:
+        self._last_think = self.clock.now()
         try:
             return await self.thinker.think(ctx)
         except LLMError as e:
@@ -657,8 +695,8 @@ class Mind:
         await self._emit(State(mood=self.emotion.mood()[0], closeness_tier=self.emotion.tier()))
 
     async def _maybe_initiate(self) -> None:
-        """Call only while holding the lock."""
-        if not self._can_be_heard() or not self.initiative.should_fire():
+        """Call only while holding the lock. A reply the user waits for goes first."""
+        if self._replies_waiting or not self._can_be_heard() or not self.initiative.should_fire():
             return
         reason = self.initiative.last_reason or "You feel like saying something."
         thought = await self._think(self._ctx("initiative", reason))
@@ -685,7 +723,7 @@ class Mind:
                 if await self.reflection.summarize_pending() is None:
                     self._summarize_after = now + SUMMARIZE_RETRY
             user_idle = self._last_event is None or now - self._last_event >= REFLECT_IDLE
-            if user_idle and self.reflection.due(self._last_event):
+            if user_idle and not self._replies_waiting and self.reflection.due(self._last_event):
                 await self.reflection.reflect()
             await self._maybe_initiate()
             await self._maybe_body_thought()
@@ -695,7 +733,9 @@ class Mind:
 
         Only for a phone that reports her body, and not right after the user talked to or tapped her.
         """
-        if not (self.body is not None and self._can_be_heard() and self.initiative.body_allowed()):
+        if self._replies_waiting or not (
+            self.body is not None and self._can_be_heard() and self.initiative.body_allowed()
+        ):
             return
         now = self.clock.now()
         if self._next_body_at is None:

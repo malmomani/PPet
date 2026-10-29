@@ -44,7 +44,9 @@ FELL_BUMP = 6.0
 FELL_GAP = timedelta(seconds=300)  # one fall counts (urge and memory) at most every 5 min
 SHOOED_BUMP = 10.0
 BODY_ACTIVE_WINDOW = timedelta(seconds=300)  # silent body thoughts only while the user is around
-TEASE_GAP = timedelta(seconds=600)
+AROUND_WINDOW = timedelta(minutes=10)  # the urge builds faster this long after the user did something
+AROUND_MULT = 6.0  # while the user is around she has something to react to, so she speaks up sooner
+TEASE_GAP = timedelta(seconds=240)
 SIGHT_BUMP = 5.0
 SIGHT_GAP = timedelta(seconds=300)  # an auto sight raises the urge at most every 5 min
 ACT_WINDOW = timedelta(hours=1)
@@ -98,6 +100,7 @@ class Initiative:
         self._app: dict | None = s.get("app")  # {"package", "label", "start"}
         self._session_bumped: bool = s.get("session_bumped", False)
         self._last_activity: str | None = s.get("last_activity")
+        self._last_seen: str | None = s.get("last_seen")  # the screen last changed under the user's hands (a glance)
         self._silent_until: str | None = s.get("silent_until")
         self._last_remark: str | None = s.get("last_remark")
         self._day: str | None = s.get("day")
@@ -125,6 +128,7 @@ class Initiative:
                 "app": self._app,
                 "session_bumped": self._session_bumped,
                 "last_activity": self._last_activity,
+                "last_seen": self._last_seen,
                 "silent_until": self._silent_until,
                 "last_remark": self._last_remark,
                 "day": self._day,
@@ -209,6 +213,7 @@ class Initiative:
                 self._notified[event.sender] = now.isoformat()
                 bumps.append((NOTIFICATION_BUMP, _notification_reason(event)))
         elif isinstance(event, GlanceEvent):
+            self._last_seen = now.isoformat()
             glanced = _dt(self._glanced)
             if glanced is None or now - glanced >= GLANCE_GAP:
                 self._glanced = now.isoformat()
@@ -251,7 +256,8 @@ class Initiative:
         silenced = silent_until is not None and now < silent_until
         quiet = self._in_quiet(now) and not self._late_pending
         if not (silenced or quiet):
-            self._bump(TIER_MULT.get(tier, 1.0) * MOOD_MULT.get(mood, 1.0))
+            mult = AROUND_MULT if self._around(now, AROUND_WINDOW) else 1.0
+            self._bump(TIER_MULT.get(tier, 1.0) * MOOD_MULT.get(mood, 1.0) * mult)
         app = self.current_app()
         if app is not None and app[1] > LONG_SESSION_MIN and not self._session_bumped:
             self._session_bumped = True
@@ -304,11 +310,15 @@ class Initiative:
         silent_until = _dt(self._silent_until)
         return (silent_until is not None and now < silent_until) or self._in_quiet(now)
 
+    def _around(self, now: datetime, window: timedelta) -> bool:
+        """Did the user do something, or did the screen change (a glance), within [window]?"""
+        stamps = (_dt(self._last_activity), _dt(self._last_seen))
+        return any(t is not None and now - t <= window for t in stamps)
+
     def body_allowed(self) -> bool:
         """May a silent body thought run now? Only while the user is around and she isn't asked to be quiet."""
         now = self.clock.now()
-        active = _dt(self._last_activity)
-        return not self._hushed(now) and active is not None and now - active <= BODY_ACTIVE_WINDOW
+        return not self._hushed(now) and self._around(now, BODY_ACTIVE_WINDOW)
 
     def fall_counts(self) -> bool:
         """Would a `fell` moment now count (bump the urge, be remembered)? At most one per FELL_GAP."""

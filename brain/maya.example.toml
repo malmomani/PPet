@@ -75,9 +75,9 @@ threshold = 60.0
 # Seconds between initiative checks.
 tick_s = 30.0
 # Minimum minutes between unprompted messages.
-cooldown_min = 10
+cooldown_min = 5
 # Maximum unprompted messages per local day.
-daily_cap = 15
+daily_cap = 40
 # Start of quiet hours (local time, HH:MM).
 quiet_start = "23:30"
 # End of quiet hours (local time, HH:MM).
