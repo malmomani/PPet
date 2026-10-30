@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -6,6 +7,8 @@ import numpy as np
 
 from maya_brain.clock import Clock
 from maya_brain.llm import LLM, LLMError
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,6 +48,15 @@ class Memory:
         self.llm = llm
         self.clock = clock
         self.buffer_size = buffer_size
+        self._embed_warned = False
+
+    def _embed_failed(self, e: LLMError) -> None:
+        """Memory search is down: say why once (loudly), then quietly."""
+        if self._embed_warned:
+            log.debug("embedding failed: %s", e)
+            return
+        self._embed_warned = True
+        log.warning("memory search is off: the embeddings server (Ollama) refused: %s", e)
 
     # --- short-term turns ---
     def add_turn(self, role: str, content: str) -> None:
@@ -77,11 +89,16 @@ class Memory:
 
     # --- episodes ---
     async def add_episode(self, summary: str, importance: int) -> int:
+        """Stores an episode. Without embeddings (the server failed) it is kept anyway, just not searchable."""
         importance = max(1, min(5, int(importance)))
-        vec = np.asarray(await self.llm.embed(summary), dtype=np.float32)
+        try:
+            blob = np.asarray(await self.llm.embed(summary), dtype=np.float32).tobytes()
+        except LLMError as e:
+            self._embed_failed(e)
+            blob = None
         cur = self.db.execute(
             "INSERT INTO episodes(summary, embedding, importance, created_at) VALUES(?, ?, ?, ?)",
-            (summary, vec.tobytes(), importance, self.clock.now().isoformat()),
+            (summary, blob, importance, self.clock.now().isoformat()),
         )
         return int(cur.lastrowid)
 
@@ -91,7 +108,8 @@ class Memory:
             return []
         try:
             q = np.asarray(await self.llm.embed(query), dtype=np.float32)
-        except LLMError:
+        except LLMError as e:
+            self._embed_failed(e)
             return []
         qn = float(np.linalg.norm(q))
         now = self.clock.now()

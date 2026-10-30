@@ -131,3 +131,12 @@ def test_turns_ordered_by_id_even_if_clock_went_back(mem):
     assert [t.content for t in m.recent_turns()] == ["first", "second"]
     assert [t.content for t in m.unsummarized_turns()] == ["first", "second"]
     assert m.last_turn_time() == datetime(2026, 10, 24, 11, tzinfo=timezone.utc)
+
+
+async def test_episode_kept_without_embedding_and_failure_logged_once(mem, caplog):
+    m, _ = mem
+    m.llm.fail_next = 2
+    await m.add_episode("We talked about ramen", 3)  # stored, just not searchable
+    assert await m.recall("ramen") == []
+    assert [e.summary for e in m.episodes_since(datetime(2000, 1, 1).astimezone())] == ["We talked about ramen"]
+    assert sum("memory search is off" in r.message for r in caplog.records) == 1

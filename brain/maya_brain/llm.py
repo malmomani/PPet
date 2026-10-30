@@ -26,6 +26,18 @@ class LLMError(Exception):
     pass
 
 
+def _http_error(where: str, e: Exception) -> LLMError:
+    """An LLMError that names what the server said, e.g. Ollama's `{"error": "..."}` behind a 400."""
+    if isinstance(e, httpx.HTTPStatusError):
+        try:
+            detail = e.response.json().get("error")
+        except Exception:
+            detail = None
+        text = str(detail if detail else e.response.text).strip()[:300]
+        return LLMError(f"{where} failed: HTTP {e.response.status_code}" + (f": {text}" if text else ""))
+    return LLMError(f"{where} failed: {e!r}")
+
+
 class EmbedWarmUpError(LLMError):
     """The chat server answered but the Ollama embeddings server did not."""
 
@@ -102,7 +114,7 @@ class OllamaLLM:
                 resp.raise_for_status()
                 data = resp.json()
         except (httpx.HTTPError, ValueError) as e:
-            raise LLMError(f"{path} failed: {e!r}") from e
+            raise _http_error(path, e) from e
         if not isinstance(data, dict):
             raise LLMError(f"{path} returned unexpected shape")
         return data
@@ -162,7 +174,7 @@ class OpenAILLM:
                 resp.raise_for_status()
                 data = resp.json()
         except (httpx.HTTPError, ValueError) as e:
-            raise LLMError(f"{url} failed: {e!r}") from e
+            raise _http_error(url, e) from e
         if not isinstance(data, dict):
             raise LLMError(f"{url} returned unexpected shape")
         return data

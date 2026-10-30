@@ -30,7 +30,7 @@ async def test_summarize_bad_json_keeps_turns(refl, memory, llm):
     assert await refl.summarize_pending() is None and len(memory.unsummarized_turns()) == 1
 
 
-async def test_summarize_embed_failure_keeps_turns(refl, memory, llm):
+async def test_summarize_embed_failure_still_saves_the_episode(refl, memory, llm):
     memory.add_turn("user", "x")
     llm.replies = ['{"summary": "The user said x.", "importance": 2}']
 
@@ -40,7 +40,8 @@ async def test_summarize_embed_failure_keeps_turns(refl, memory, llm):
         raise LLMError("embed down")
 
     llm.embed = boom
-    assert await refl.summarize_pending() is None and len(memory.unsummarized_turns()) == 1
+    assert await refl.summarize_pending() is not None and memory.unsummarized_turns() == []
+    assert [e.summary for e in memory.episodes_since(memory.clock.now() - timedelta(days=1))] == ["The user said x."]
 
 
 async def test_summarize_prompt_has_transcript(refl, memory, llm):

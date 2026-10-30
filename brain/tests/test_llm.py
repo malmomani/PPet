@@ -144,3 +144,15 @@ async def test_warm_up_raises_when_ollama_down():
 
     with pytest.raises(LLMError):
         await OllamaLLM(LLMConfig(), transport=httpx.MockTransport(boom)).warm_up()
+
+
+async def test_http_error_names_the_server_message():
+    import httpx
+
+    from maya_brain.config import LLMConfig
+    from maya_brain.llm import LLMError, OllamaLLM
+
+    transport = httpx.MockTransport(lambda req: httpx.Response(400, json={"error": "input length exceeds the context length"}))
+    llm = OllamaLLM(LLMConfig(), transport=transport)
+    with pytest.raises(LLMError, match="HTTP 400: input length exceeds the context length"):
+        await llm.embed("hi")
