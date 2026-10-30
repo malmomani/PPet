@@ -25,7 +25,7 @@ class LLMConfig:
     chat_model: str = "qwen3:8b"
     embed_model: str = "nomic-embed-text"
     timeout_s: float = 120.0
-    keep_alive: str = "30m"
+    keep_alive: str | int = "30m"
     warmup_timeout_s: float = 300.0
     think: bool | None = False
     temperature: float = 0.8

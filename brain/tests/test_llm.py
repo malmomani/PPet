@@ -156,3 +156,27 @@ async def test_http_error_names_the_server_message():
     llm = OllamaLLM(LLMConfig(), transport=transport)
     with pytest.raises(LLMError, match="HTTP 400: input length exceeds the context length"):
         await llm.embed("hi")
+
+
+def test_keep_alive_bare_numbers_become_numbers():
+    from maya_brain.llm import keep_alive
+
+    assert keep_alive("-1") == -1 and keep_alive(" 300 ") == 300 and keep_alive("1.5") == 1.5
+    assert keep_alive("30m") == "30m" and keep_alive("-1h") == "-1h" and keep_alive(-1) == -1
+
+
+async def test_embed_sends_minus_one_as_a_number():
+    import httpx
+
+    from maya_brain.config import LLMConfig
+    from maya_brain.llm import OllamaLLM
+
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json={"embeddings": [[0.1]]})
+
+    llm = OllamaLLM(LLMConfig(keep_alive="-1"), transport=httpx.MockTransport(handler))
+    await llm.embed("hi")
+    assert seen[0]["keep_alive"] == -1

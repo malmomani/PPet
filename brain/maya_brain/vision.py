@@ -6,7 +6,7 @@ from typing import Protocol
 import httpx
 
 from maya_brain.config import Config
-from maya_brain.llm import openai_think_fields, strip_reasoning
+from maya_brain.llm import keep_alive, openai_think_fields, strip_reasoning
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ class OllamaDescriber(_HTTPDescriber):
             "messages": [{"role": "user", "content": VISION_PROMPT, "images": [image_b64]}],
             "stream": False,
             "options": {"temperature": llm.temperature},
-            "keep_alive": llm.keep_alive,
+            "keep_alive": keep_alive(llm.keep_alive),
         }
         return f"{llm.base_url.rstrip('/')}/api/chat", payload, {}
 
